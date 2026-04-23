@@ -21,8 +21,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Cordova
-        run: npm install -g cordova
+      - name: Install Cordova and ImageMagick
+        run: |
+          npm install -g cordova
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
 
       - name: Create Cordova Project
         run: |
@@ -38,7 +41,7 @@ jobs:
         run: |
           mkdir -p metronome/res/icon/android
           
-          # Создаем иконку через ImageMagick (уже установлен в ubuntu-latest)
+          # Создаем иконку через ImageMagick
           convert -size 512x512 xc:'#1a1a2e' \
             -fill '#e94560' -draw "circle 256,200 256,100" \
             -fill '#0f3460' -draw "circle 256,350 256,280" \
