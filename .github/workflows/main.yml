@@ -19,7 +19,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '21'   # <-- изменено на 21
+          java-version: '21'
 
       - name: Install Capacitor CLI and ImageMagick
         run: |
@@ -219,6 +219,18 @@ jobs:
           </body>
           </html>
           EOF
+
+      - name: Fix duplicate Kotlin dependencies
+        run: |
+          cd velometronome/android/app
+          # Исключаем устаревшие модули Kotlin, которые конфликтуют с kotlin-stdlib
+          sed -i '/apply plugin: .com.android.application./a\
+          configurations {\
+              all {\
+                  exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk7"\
+                  exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk8"\
+              }\
+          }' build.gradle
 
       - name: Sync Capacitor Android Project
         run: |
