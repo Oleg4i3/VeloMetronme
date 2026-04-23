@@ -28,8 +28,31 @@ jobs:
         run: |
           cordova create metronome com.example.metronome Metronome
           cd metronome
-          cordova platform add android
+          
           cordova plugin add cordova-plugin-vibration
+          cordova plugin add cordova-plugin-background-mode
+          cordova plugin add cordova-plugin-volume-buttons
+          
+          sed -i 's/<service android:name="de.appplant.cordova.plugin.background.ForegroundService" />/<service android:name="de.appplant.cordova.plugin.background.ForegroundService" android:foregroundServiceType="mediaPlayback" \/>/g' plugins/cordova-plugin-background-mode/plugin.xml || true
+          
+          cat << 'EOF' > config.xml
+          <?xml version='1.0' encoding='utf-8'?>
+          <widget id="com.example.metronome" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0" xmlns:android="http://schemas.android.com/apk/res/android">
+              <name>Metronome</name>
+              <content src="index.html" />
+              <access origin="*" />
+              <preference name="KeepRunning" value="true"/>
+              <platform name="android">
+                  <config-file target="AndroidManifest.xml" parent="/*">
+                      <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+                      <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+                      <uses-permission android:name="android.permission.WAKE_LOCK" />
+                  </config-file>
+              </platform>
+          </widget>
+          EOF
+          
+          cordova platform add android
 
       - name: Write Application Source
         run: |
@@ -64,6 +87,31 @@ jobs:
               let isRunning = false;
               let beat = 0;
               let nextTime = 0;
+              let lastVolTime = 0;
+
+              if (window.cordova && cordova.plugins && cordova.plugins.backgroundMode) {
+                  cordova.plugins.backgroundMode.setDefaults({
+                      title: 'Metronome',
+                      text: 'Running',
+                      hidden: false,
+                      silent: false
+                  });
+                  cordova.plugins.backgroundMode.enable();
+                  cordova.plugins.backgroundMode.on('activate', function() {
+                      cordova.plugins.backgroundMode.disableWebViewOptimizations();
+                  });
+              }
+
+              function handleVolumeButton() {
+                  const now = Date.now();
+                  if (now - lastVolTime < 500) {
+                      if (isRunning) stop(); else start();
+                  }
+                  lastVolTime = now;
+              }
+
+              window.addEventListener("volumeupbutton", handleVolumeButton, false);
+              window.addEventListener("volumedownbutton", handleVolumeButton, false);
 
               const bpmSlider = document.getElementById("bpm");
               const bpmVal = document.getElementById("bpmVal");
