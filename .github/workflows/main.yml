@@ -29,9 +29,12 @@ jobs:
           cordova create metronome com.example.metronome Metronome
           cd metronome
           cordova platform add android
+          
+          # Плагин вибрации
           cordova plugin add cordova-plugin-vibration
-          # Плагин для работы приложения в фоновом режиме
-          cordova plugin add cordova-plugin-background-mode
+          
+          # Современный форк плагина для фона (не крашит Android 12+)
+          cordova plugin add cordova-plugin-advanced-background-mode
 
       - name: Write Application Source
         run: |
@@ -54,11 +57,11 @@ jobs:
           <body>
           <h2>Cadence metronome</h2>
           <label>BPM: <span id="bpmVal">90</span></label><br>
-          <input id="bpm" type="range" min="40" max="200" value="90">
+          <input id="bpm" type="range" min="40" max="180" value="90">
           <br>
           <button id="start">Start</button>
           <button id="stop">Stop</button>
-          
+
           <script src="cordova.js"></script>
           <script>
           document.addEventListener('deviceready', function() {
@@ -69,21 +72,34 @@ jobs:
               let schedulerTimer;
               let lastVolumeClickTime = 0;
 
-              // Включаем фоновый режим
+              // 1. Настройка фонового режима для стабильной работы с выключенным экраном
+              cordova.plugins.backgroundMode.setDefaults({
+                  title: 'Metronome Running',
+                  text: 'Cadence metronome is active',
+                  icon: 'icon',
+                  color: 'F14F4D',
+                  resume: true,
+                  hidden: false
+              });
               cordova.plugins.backgroundMode.enable();
               
-              // Отключаем оптимизацию WebView в фоне, чтобы таймеры не «засыпали»
               cordova.plugins.backgroundMode.on('activate', function() {
+                  // Отключаем остановку JS движка
                   cordova.plugins.backgroundMode.disableWebViewOptimizations();
+              });
+
+              // 2. Предотвращение краша при принудительном закрытии (свайп из недавних)
+              window.addEventListener('beforeunload', () => {
+                  if(cordova.plugins.backgroundMode.isActive()) {
+                      cordova.plugins.backgroundMode.disable();
+                  }
               });
 
               const bpmSlider = document.getElementById("bpm");
               const bpmVal = document.getElementById("bpmVal");
+              bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
 
-              bpmSlider.addEventListener("input", () => {
-                  bpmVal.textContent = bpmSlider.value;
-              });
-
+              // --- Ваш улучшенный звуковой синтезатор ---
               function noiseBuffer(ctx, duration=0.06) {
                   const rate = ctx.sampleRate;
                   const buffer = ctx.createBuffer(1, rate * duration, rate);
@@ -96,15 +112,20 @@ jobs:
 
               function playBeat(time, strong=false) {
                   const source = ctx.createBufferSource();
-                  source.buffer = noiseBuffer(ctx, strong ? 0.09 : 0.05);
+                  source.buffer = noiseBuffer(ctx, strong ? 0.09 : 0.06);
 
                   const filter = ctx.createBiquadFilter();
                   filter.type = "bandpass";
                   filter.frequency.value = strong ? 2200 : 1400;
                   filter.Q.value = 6;
 
+                  const highShelf = ctx.createBiquadFilter();
+                  highShelf.type = "highshelf";
+                  highShelf.frequency.value = 2000;
+                  highShelf.gain.value = strong ? 6 : 3;
+
                   const gain = ctx.createGain();
-                  gain.gain.value = strong ? 1.5 : 0.8;
+                  gain.gain.value = strong ? 1.6 : 0.9;
 
                   const comp = ctx.createDynamicsCompressor();
                   comp.threshold.value = -18;
@@ -114,37 +135,31 @@ jobs:
                   comp.release.value = 0.15;
 
                   source.connect(filter);
-                  filter.connect(gain);
+                  filter.connect(highShelf);
+                  highShelf.connect(gain);
                   gain.connect(comp);
                   comp.connect(ctx.destination);
 
+                  // Запуск воспроизведения строго в назначенное время аппаратного AudioContext
                   source.start(time);
               }
 
+              // --- Точный планировщик для фонового режима ---
               function scheduler() {
                   if (!isRunning) return;
 
                   const bpm = parseInt(bpmSlider.value);
                   const interval = 60 / bpm;
 
+                  // Планируем удары немного наперед, чтобы нивелировать лаги JS в фоне
                   while (nextTime < ctx.currentTime + 0.1) {
                       beat++;
                       const strong = (beat % 2 === 1);
-
                       playBeat(nextTime, strong);
-
-                      if (!strong) {
-                          const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
-                          setTimeout(() => {
-                              if (navigator.vibrate) navigator.vibrate(40);
-                          }, delay);
-                      }
-
                       nextTime += interval;
                   }
-
-                  // Используем setTimeout вместо requestAnimationFrame, 
-                  // так как rAF блокируется при выключенном экране
+                  
+                  // Короткий setTimeout, который благодаря фоновому плагину не будет спать
                   schedulerTimer = setTimeout(scheduler, 25);
               }
 
@@ -153,9 +168,10 @@ jobs:
                   else start();
               }
 
+              // 3. Обработка двойного нажатия громкости
               function handleVolumeButton() {
                   const currentTime = new Date().getTime();
-                  // Фиксируем двойное нажатие (менее 500 мс между кликами)
+                  // Если разница между кликами меньше 500 мс — это двойное нажатие
                   if (currentTime - lastVolumeClickTime < 500) {
                       toggleMetronome();
                       lastVolumeClickTime = 0; // Сбрасываем таймер
@@ -164,7 +180,7 @@ jobs:
                   }
               }
 
-              // Подписываемся на аппаратные кнопки громкости
+              // Подписка на кнопки громкости (работает, пока экран включен, либо когда активен backgroundMode)
               document.addEventListener("volumeupbutton", handleVolumeButton, false);
               document.addEventListener("volumedownbutton", handleVolumeButton, false);
 
