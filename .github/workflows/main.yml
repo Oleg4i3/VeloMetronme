@@ -33,15 +33,15 @@ jobs:
           cd metronome
           cordova platform add android
           
-          # Устанавливаем нужные плагины
+          # Необходимые плагины
           cordova plugin add cordova-plugin-vibration
+          cordova plugin add cordova-plugin-volume-buttons
           cordova plugin add cordova-plugin-background-mode
 
       - name: Generate App Icon
         run: |
           mkdir -p metronome/res/icon/android
           
-          # Создаем иконку через ImageMagick
           convert -size 512x512 xc:'#1a1a2e' \
             -fill '#e94560' -draw "circle 256,200 256,100" \
             -fill '#0f3460' -draw "circle 256,350 256,280" \
@@ -83,247 +83,248 @@ jobs:
           <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
           <title>VeloMetronome</title>
           <style>
+          * { box-sizing: border-box; }
           body {
-            font-family: 'Segoe UI', sans-serif;
+            font-family: sans-serif;
             padding: 20px;
-            background: linear-gradient(135deg, #1a1a2e, #16213e);
+            background: #121212;
             color: #fff;
             text-align: center;
             min-height: 100vh;
             margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
           }
           .container {
+            width: 100%;
             max-width: 400px;
-            margin: 0 auto;
           }
           h2 {
-            color: #e94560;
-            margin-bottom: 30px;
+            color: #ff6b6b;
+            margin-bottom: 20px;
           }
           .bpm-display {
-            font-size: 72px;
+            font-size: 80px;
             font-weight: bold;
-            color: #e94560;
-            margin: 20px 0;
-            text-shadow: 0 0 20px rgba(233, 69, 96, 0.5);
+            color: #ff6b6b;
+            margin: 10px 0;
+            text-shadow: 0 0 20px rgba(255,107,107,0.5);
           }
           input[type=range] {
             width: 100%;
             height: 40px;
-            margin: 20px 0;
-            appearance: none;
-            background: #0f3460;
-            border-radius: 20px;
-            outline: none;
-          }
-          input[type=range]::-webkit-slider-thumb {
-            appearance: none;
-            width: 50px;
-            height: 50px;
-            background: #e94560;
-            border-radius: 50%;
-            cursor: pointer;
+            margin: 15px 0;
+            accent-color: #ff6b6b;
           }
           button {
             width: 100%;
-            padding: 20px;
-            font-size: 24px;
-            margin: 10px 0;
+            padding: 18px;
+            font-size: 22px;
+            margin: 8px 0;
             border: none;
-            border-radius: 15px;
-            color: white;
+            border-radius: 12px;
             font-weight: bold;
-            transition: all 0.3s;
+            color: white;
           }
           #start {
-            background: linear-gradient(135deg, #1a4d1a, #2d8a2d);
+            background: #2ecc71;
           }
           #stop {
-            background: linear-gradient(135deg, #4d1a1a, #8a2d2d);
+            background: #e74c3c;
           }
           .checkbox-container {
             display: flex;
             justify-content: space-around;
-            margin: 20px 0;
-            padding: 15px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 15px;
+            margin: 15px 0;
+            padding: 12px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 12px;
           }
           .checkbox-item {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
           }
           input[type=checkbox] {
-            width: 24px;
-            height: 24px;
-            accent-color: #e94560;
+            width: 20px;
+            height: 20px;
+            accent-color: #ff6b6b;
           }
           .status {
             font-size: 14px;
-            color: #888;
-            margin-top: 20px;
-            padding: 10px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 10px;
-          }
-          label {
-            font-size: 16px;
+            color: #aaa;
+            margin-top: 15px;
+            padding: 8px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
           }
           </style>
           </head>
           <body>
           <div class="container">
-            <h2>🚴 VeloMetronome</h2>
+            <h2>⏱ VeloMetronome</h2>
             <div class="bpm-display" id="bpmVal">90</div>
-            <div style="color: #888; margin-bottom: 10px;">BPM</div>
+            <div style="color:#aaa;">BPM</div>
             <input id="bpm" type="range" min="40" max="180" value="90">
             
             <div class="checkbox-container">
               <div class="checkbox-item">
                 <input type="checkbox" id="vibrateWeak" checked>
-                <label>Слабая доля</label>
+                <label>Слабая вибрация</label>
               </div>
               <div class="checkbox-item">
                 <input type="checkbox" id="vibrateStrong" checked>
-                <label>Сильная доля</label>
+                <label>Сильная вибрация</label>
               </div>
             </div>
             
-            <button id="start">▶ START</button>
-            <button id="stop">⏹ STOP</button>
-            <div class="status">
-              💡 Экран выключен – кнопки громкости = СТАРТ/СТОП
+            <button id="start">▶ СТАРТ</button>
+            <button id="stop">■ СТОП</button>
+            <div class="status" id="modeStatus">
+              🔔 Громкость: стандартный режим
             </div>
           </div>
-          
-          <audio id="silentAudio" loop src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
 
           <script src="cordova.js"></script>
           <script>
-          const workerCode = `
-              let timer = null;
-              self.onmessage = function(e) {
-                  if (e.data === 'start') timer = setInterval(() => postMessage('tick'), 25);
-                  else if (e.data === 'stop') clearInterval(timer);
-              };
-          `;
-          const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
-          const timerWorker = new Worker(URL.createObjectURL(workerBlob));
-
           document.addEventListener('deviceready', function() {
-              let ctx, isRunning = false, beat = 0, nextTime = 0;
+            let ctx = null;
+            let isRunning = false;
+            let timer = null;
+            let nextBeatTime = 0;
+            let beatCount = 0;
+            let isScreenOff = false;
 
-              const bpmSlider = document.getElementById("bpm");
-              const bpmVal = document.getElementById("bpmVal");
-              const silentAudio = document.getElementById("silentAudio");
-              const vibrateWeakCheck = document.getElementById("vibrateWeak");
-              const vibrateStrongCheck = document.getElementById("vibrateStrong");
+            const bpmSlider = document.getElementById("bpm");
+            const bpmVal = document.getElementById("bpmVal");
+            const vibWeak = document.getElementById("vibrateWeak");
+            const vibStrong = document.getElementById("vibrateStrong");
+            const modeStatus = document.getElementById("modeStatus");
 
-              if (cordova.plugins.backgroundMode) {
-                  cordova.plugins.backgroundMode.enable();
-                  cordova.plugins.backgroundMode.setDefaults({ 
-                      silent: true,
-                      hidden: true
-                  });
-              }
+            // Фоновый режим
+            if (cordova.plugins.backgroundMode) {
+              cordova.plugins.backgroundMode.enable();
+              cordova.plugins.backgroundMode.setDefaults({
+                title: 'Метроном',
+                text: 'Каденс',
+                silent: true,
+                hidden: true
+              });
+            }
 
-              // Динамическое переключение режима кнопок громкости
-              document.addEventListener('pause', function() {
-                  // Экран выключен – перехватываем кнопки громкости
-                  if (cordova.plugins.backgroundMode) {
-                      cordova.plugins.backgroundMode.overrideVolumeButtons(true);
-                  }
-              }, false);
+            bpmSlider.oninput = () => {
+              bpmVal.textContent = bpmSlider.value;
+            };
 
-              document.addEventListener('resume', function() {
-                  // Экран включен – возвращаем стандартное поведение
-                  if (cordova.plugins.backgroundMode) {
-                      cordova.plugins.backgroundMode.overrideVolumeButtons(false);
-                  }
-                  // Возобновляем аудиоконтекст, если был
-                  if (ctx && ctx.state === 'suspended') ctx.resume();
-              }, false);
-
-              // Обработка нажатий громкости (сработает только когда перехват включен)
-              document.addEventListener('volumeupbutton', function() {
+            // Кнопки громкости через volume-buttons плагин
+            if (window.volumeButtons) {
+              // Этот плагин сам отличает экран выключен / включен
+              window.volumeButtons.onVolumeUp(function() {
+                if (isScreenOff) {
                   toggle();
-              }, false);
-              
-              document.addEventListener('volumedownbutton', function() {
+                }
+              });
+              window.volumeButtons.onVolumeDown(function() {
+                if (isScreenOff) {
                   toggle();
-              }, false);
+                }
+              });
+            }
 
-              bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
+            // Отслеживание состояния экрана
+            document.addEventListener('pause', function() {
+              isScreenOff = true;
+              modeStatus.textContent = '🎧 Экран выкл: громкость → СТАРТ/СТОП';
+            }, false);
 
-              function noiseBuffer(ctx, dur=0.06) {
-                  const b = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
-                  const d = b.getChannelData(0);
-                  for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2 - 1) * 0.7;
-                  return b;
+            document.addEventListener('resume', function() {
+              isScreenOff = false;
+              modeStatus.textContent = '🔔 Громкость: стандартный режим';
+              if (ctx && ctx.state === 'suspended') ctx.resume();
+            }, false);
+
+            // Генератор шума
+            function noiseBuffer(audioCtx, duration) {
+              const length = audioCtx.sampleRate * duration;
+              const buffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
+              const data = buffer.getChannelData(0);
+              for (let i = 0; i < length; i++) {
+                data[i] = (Math.random() * 2 - 1) * 0.6;
               }
+              return buffer;
+            }
 
-              function playBeat(time, strong) {
-                  const s = ctx.createBufferSource();
-                  s.buffer = noiseBuffer(ctx, strong ? 0.08 : 0.05);
-                  const f = ctx.createBiquadFilter();
-                  f.type = "bandpass";
-                  f.frequency.value = strong ? 2200 : 1200;
-                  const g = ctx.createGain();
-                  g.gain.value = strong ? 1.5 : 0.7;
-                  s.connect(f); f.connect(g); g.connect(ctx.destination);
-                  s.start(time);
+            function playClick(time, strong) {
+              const source = ctx.createBufferSource();
+              source.buffer = noiseBuffer(ctx, strong ? 0.08 : 0.06);
+              const filter = ctx.createBiquadFilter();
+              filter.type = 'bandpass';
+              filter.frequency.value = strong ? 2000 : 1000;
+              const gain = ctx.createGain();
+              gain.gain.value = strong ? 1.4 : 0.7;
+              source.connect(filter);
+              filter.connect(gain);
+              gain.connect(ctx.destination);
+              source.start(time);
+
+              // Вибрация (синхронно)
+              const doVib = (strong && vibStrong.checked) || (!strong && vibWeak.checked);
+              if (doVib && navigator.vibrate) {
+                const delayMs = Math.max(0, (time - ctx.currentTime) * 1000);
+                setTimeout(function() {
+                  navigator.vibrate(40);
+                }, delayMs);
               }
+            }
 
-              timerWorker.onmessage = function() {
-                  if (!isRunning) return;
-                  const interval = 60 / parseInt(bpmSlider.value);
-                  while (nextTime < ctx.currentTime + 0.1) {
-                      beat++;
-                      const isStrong = (beat % 2 === 1);
-                      playBeat(nextTime, isStrong);
-                      
-                      // Вибрация с использованием плагина (гарантированно работает в фоне)
-                      const shouldVibrate = (isStrong && vibrateStrongCheck.checked) || 
-                                          (!isStrong && vibrateWeakCheck.checked);
-                      
-                      if (shouldVibrate) {
-                          const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
-                          setTimeout(() => { 
-                              if (window.navigator && window.navigator.notification && window.navigator.notification.vibrate) {
-                                  window.navigator.notification.vibrate(50);
-                              } else if (window.navigator && window.navigator.vibrate) {
-                                  window.navigator.vibrate(50);
-                              }
-                          }, delay);
-                      }
-                      nextTime += interval;
-                  }
-              };
-
-              function toggle() { isRunning ? stop() : start(); }
-
-              function start() {
-                  if (isRunning) return;
-                  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-                  ctx.resume();
-                  silentAudio.play().catch(()=>{});
-                  isRunning = true; beat = 0; nextTime = ctx.currentTime + 0.05;
-                  timerWorker.postMessage('start');
-                  document.getElementById("start").style.opacity = "0.7";
-                  document.getElementById("start").style.transform = "scale(0.95)";
+            function scheduler() {
+              if (!isRunning) return;
+              const bpm = parseInt(bpmSlider.value);
+              const interval = 60 / bpm;
+              while (nextBeatTime < ctx.currentTime + 0.1) {
+                beatCount++;
+                const isStrong = (beatCount % 2 === 1);
+                playClick(nextBeatTime, isStrong);
+                nextBeatTime += interval;
               }
+            }
 
-              function stop() {
-                  isRunning = false;
-                  timerWorker.postMessage('stop');
-                  silentAudio.pause();
-                  document.getElementById("start").style.opacity = "1";
-                  document.getElementById("start").style.transform = "scale(1)";
+            function toggle() {
+              if (isRunning) {
+                stop();
+              } else {
+                start();
               }
+            }
 
-              document.getElementById("start").onclick = start;
-              document.getElementById("stop").onclick = stop;
+            function start() {
+              if (isRunning) return;
+              if (!ctx) {
+                ctx = new (window.AudioContext || window.webkitAudioContext)();
+              }
+              ctx.resume();
+              isRunning = true;
+              beatCount = 0;
+              nextBeatTime = ctx.currentTime + 0.05;
+              // Запускаем тикание каждые 25 мс для точного планирования
+              if (timer) clearInterval(timer);
+              timer = setInterval(scheduler, 25);
+              document.getElementById("start").style.opacity = "0.6";
+            }
+
+            function stop() {
+              isRunning = false;
+              if (timer) {
+                clearInterval(timer);
+                timer = null;
+              }
+              document.getElementById("start").style.opacity = "1";
+            }
+
+            document.getElementById("start").onclick = start;
+            document.getElementById("stop").onclick = stop;
+
           }, false);
           </script>
           </body>
