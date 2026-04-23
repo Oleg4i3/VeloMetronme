@@ -33,9 +33,8 @@ jobs:
           cd metronome
           cordova platform add android
           
-          # Необходимые плагины
+          # Только реально существующие плагины
           cordova plugin add cordova-plugin-vibration
-          cordova plugin add cordova-plugin-volume-buttons
           cordova plugin add cordova-plugin-background-mode
 
       - name: Generate App Icon
@@ -194,7 +193,6 @@ jobs:
             let timer = null;
             let nextBeatTime = 0;
             let beatCount = 0;
-            let isScreenOff = false;
 
             const bpmSlider = document.getElementById("bpm");
             const bpmVal = document.getElementById("bpmVal");
@@ -202,7 +200,7 @@ jobs:
             const vibStrong = document.getElementById("vibrateStrong");
             const modeStatus = document.getElementById("modeStatus");
 
-            // Фоновый режим
+            // Фоновый режим + настройка кнопок громкости
             if (cordova.plugins.backgroundMode) {
               cordova.plugins.backgroundMode.enable();
               cordova.plugins.backgroundMode.setDefaults({
@@ -211,40 +209,41 @@ jobs:
                 silent: true,
                 hidden: true
               });
+
+              // Даём плагину активироваться, затем ставим режим громкости по умолчанию
+              setTimeout(function() {
+                cordova.plugins.backgroundMode.overrideVolumeButtons(false);
+              }, 500);
             }
 
             bpmSlider.oninput = () => {
               bpmVal.textContent = bpmSlider.value;
             };
 
-            // Кнопки громкости через volume-buttons плагин
-            if (window.volumeButtons) {
-              // Этот плагин сам отличает экран выключен / включен
-              window.volumeButtons.onVolumeUp(function() {
-                if (isScreenOff) {
-                  toggle();
-                }
-              });
-              window.volumeButtons.onVolumeDown(function() {
-                if (isScreenOff) {
-                  toggle();
-                }
-              });
-            }
+            // События громкости: будут срабатывать только когда перехват включен
+            document.addEventListener('volumeupbutton', function() {
+              toggle();
+            }, false);
+            document.addEventListener('volumedownbutton', function() {
+              toggle();
+            }, false);
 
-            // Отслеживание состояния экрана
+            // Управление перехватом в зависимости от состояния экрана
             document.addEventListener('pause', function() {
-              isScreenOff = true;
+              if (cordova.plugins.backgroundMode) {
+                cordova.plugins.backgroundMode.overrideVolumeButtons(true);
+              }
               modeStatus.textContent = '🎧 Экран выкл: громкость → СТАРТ/СТОП';
             }, false);
 
             document.addEventListener('resume', function() {
-              isScreenOff = false;
+              if (cordova.plugins.backgroundMode) {
+                cordova.plugins.backgroundMode.overrideVolumeButtons(false);
+              }
               modeStatus.textContent = '🔔 Громкость: стандартный режим';
               if (ctx && ctx.state === 'suspended') ctx.resume();
             }, false);
 
-            // Генератор шума
             function noiseBuffer(audioCtx, duration) {
               const length = audioCtx.sampleRate * duration;
               const buffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
@@ -268,7 +267,6 @@ jobs:
               gain.connect(ctx.destination);
               source.start(time);
 
-              // Вибрация (синхронно)
               const doVib = (strong && vibStrong.checked) || (!strong && vibWeak.checked);
               if (doVib && navigator.vibrate) {
                 const delayMs = Math.max(0, (time - ctx.currentTime) * 1000);
@@ -307,7 +305,6 @@ jobs:
               isRunning = true;
               beatCount = 0;
               nextBeatTime = ctx.currentTime + 0.05;
-              // Запускаем тикание каждые 25 мс для точного планирования
               if (timer) clearInterval(timer);
               timer = setInterval(scheduler, 25);
               document.getElementById("start").style.opacity = "0.6";
@@ -324,7 +321,6 @@ jobs:
 
             document.getElementById("start").onclick = start;
             document.getElementById("stop").onclick = stop;
-
           }, false);
           </script>
           </body>
