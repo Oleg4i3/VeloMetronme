@@ -30,17 +30,14 @@ jobs:
           cd metronome
           cordova platform add android
           
-          # Плагины для работы
+          # Устанавливаем только реально существующие и нужные плагины
           cordova plugin add cordova-plugin-vibration
           cordova plugin add cordova-plugin-background-mode
-          # Плагин для отслеживания кнопок громкости даже в фоне
-          cordova plugin add cordova-plugin-volume-buttons
 
       - name: Create App Icon
         run: |
-          # Создаем простую иконку (заглушку) через базовую PNG-строку (красный ромб)
           mkdir -p metronome/res/icon/android
-          echo "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH5gMREh0XzD99VAAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLm3EAAABEUlEQVR42u3dsQ3CQBQE0S9ncA50QAt0QS00QCf0XwjSByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SB5n5R5pX3O7pAAAAAElFTkSuQmCC" | base64 -d > metronome/www/icon.png
+          echo "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH5gMREh0XzD99VAAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLm3EAAABEUlEQVR42u3dsQ3CQBQE0S9ncA50QAt0QS00QCf0XwjSByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SB5n5R5pX3O7pAAAAAElFTkSuQmCC" | base64 -d > metronome/www/icon.png
           cp metronome/www/icon.png metronome/res/icon/android/icon.png
 
       - name: Configure config.xml
@@ -105,15 +102,17 @@ jobs:
 
           document.addEventListener('deviceready', function() {
               let ctx, isRunning = false, beat = 0, nextTime = 0, lastVolTime = 0;
-              let isPaused = false; // Состояние экрана
+              let isPaused = false; 
 
               const bpmSlider = document.getElementById("bpm");
               const bpmVal = document.getElementById("bpmVal");
               const silentAudio = document.getElementById("silentAudio");
 
               // Настройка фонового режима
-              cordova.plugins.backgroundMode.enable();
-              cordova.plugins.backgroundMode.setDefaults({ silent: true });
+              if (cordova.plugins.backgroundMode) {
+                  cordova.plugins.backgroundMode.enable();
+                  cordova.plugins.backgroundMode.setDefaults({ silent: true });
+              }
 
               document.addEventListener('pause', () => { isPaused = true; }, false);
               document.addEventListener('resume', () => { 
@@ -121,11 +120,9 @@ jobs:
                   if (ctx && ctx.state === 'suspended') ctx.resume();
               }, false);
 
-              // Обработка громкости: 
-              // Если экран выключен (isPaused), то двойное нажатие громкости переключает метроном.
-              // При включенном экране работает стандартная регулировка.
-              function handleVolume() {
-                  if (!isPaused) return; // Если экран горит, ничего не перехватываем
+              // Обработка громкости
+              function handleVolume(e) {
+                  if (!isPaused) return; // Если экран горит, ничего не перехватываем (громкость меняется штатно)
                   
                   const now = Date.now();
                   if (now - lastVolTime < 600) {
@@ -135,8 +132,10 @@ jobs:
                       lastVolTime = now;
                   }
               }
-              window.addEventListener('volumeupbutton', handleVolume, false);
-              window.addEventListener('volumedownbutton', handleVolume, false);
+              
+              // Cordova "из коробки" слушает эти аппаратные события
+              document.addEventListener('volumeupbutton', handleVolume, false);
+              document.addEventListener('volumedownbutton', handleVolume, false);
 
               bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
 
@@ -167,10 +166,12 @@ jobs:
                       const isStrong = (beat % 2 === 1);
                       playBeat(nextTime, isStrong);
                       
-                      // ВИБРО НА СЛАБУЮ ДОЛЮ (beat % 2 === 0)
+                      // ВИБРО НА СЛАБУЮ ДОЛЮ
                       if (!isStrong) {
                           const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
-                          setTimeout(() => { navigator.vibrate(50); }, delay);
+                          setTimeout(() => { 
+                              if(navigator.vibrate) navigator.vibrate(50); 
+                          }, delay);
                       }
                       nextTime += interval;
                   }
