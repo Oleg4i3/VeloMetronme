@@ -1,0 +1,168 @@
+name: Build Metronome APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Cordova
+        run: npm install -g cordova
+
+      - name: Create Cordova Project
+        run: |
+          cordova create metronome com.example.metronome Metronome
+          cd metronome
+          cordova platform add android
+          cordova plugin add cordova-plugin-vibration
+
+      - name: Write Application Source
+        run: |
+          cat << 'EOF' > metronome/www/index.html
+          <!doctype html>
+          <html>
+          <head>
+          <meta charset="utf-8">
+          <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: gap: https://ssl.gstatic.com 'unsafe-eval' 'unsafe-inline'; media-src *; img-src 'self' data: content:;">
+          <meta name="format-detection" content="telephone=no">
+          <meta name="msapplication-tap-highlight" content="no">
+          <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
+          <title>Bike Cadence Metronome</title>
+          <style>
+          body { font-family: sans-serif; padding: 20px; background:#111; color:#eee; }
+          button, input { font-size: 18px; margin: 12px 0; }
+          input[type=range]{ width: 100%; }
+          </style>
+          </head>
+          <body>
+          <h2>Cadence metronome</h2>
+          <label>BPM: <span id="bpmVal">90</span></label><br>
+          <input id="bpm" type="range" min="40" max="200" value="90">
+          <br>
+          <button id="start">Start</button>
+          <button id="stop">Stop</button>
+          
+          <script src="cordova.js"></script>
+          <script>
+          document.addEventListener('deviceready', function() {
+              let ctx;
+              let isRunning = false;
+              let beat = 0;
+              let nextTime = 0;
+
+              const bpmSlider = document.getElementById("bpm");
+              const bpmVal = document.getElementById("bpmVal");
+
+              bpmSlider.addEventListener("input", () => {
+                  bpmVal.textContent = bpmSlider.value;
+              });
+
+              function noiseBuffer(ctx, duration=0.06) {
+                  const rate = ctx.sampleRate;
+                  const buffer = ctx.createBuffer(1, rate * duration, rate);
+                  const data = buffer.getChannelData(0);
+                  for (let i = 0; i < data.length; i++) {
+                      data[i] = (Math.random()*2 - 1) * 0.8;
+                  }
+                  return buffer;
+              }
+
+              function playBeat(time, strong=false) {
+                  const source = ctx.createBufferSource();
+                  source.buffer = noiseBuffer(ctx, strong ? 0.09 : 0.05);
+
+                  const filter = ctx.createBiquadFilter();
+                  filter.type = "bandpass";
+                  filter.frequency.value = strong ? 2200 : 1400;
+                  filter.Q.value = 6;
+
+                  const gain = ctx.createGain();
+                  gain.gain.value = strong ? 1.5 : 0.8;
+
+                  const comp = ctx.createDynamicsCompressor();
+                  comp.threshold.value = -18;
+                  comp.knee.value = 20;
+                  comp.ratio.value = 6;
+                  comp.attack.value = 0.003;
+                  comp.release.value = 0.15;
+
+                  source.connect(filter);
+                  filter.connect(gain);
+                  gain.connect(comp);
+                  comp.connect(ctx.destination);
+
+                  source.start(time);
+              }
+
+              function scheduler() {
+                  if (!isRunning) return;
+
+                  const bpm = parseInt(bpmSlider.value);
+                  const interval = 60 / bpm;
+
+                  while (nextTime < ctx.currentTime + 0.1) {
+                      beat++;
+                      const strong = (beat % 2 === 1);
+
+                      playBeat(nextTime, strong);
+
+                      if (!strong) {
+                          const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
+                          setTimeout(() => {
+                              if (navigator.vibrate) navigator.vibrate(40);
+                          }, delay);
+                      }
+
+                      nextTime += interval;
+                  }
+
+                  requestAnimationFrame(scheduler);
+              }
+
+              function start() {
+                  if (isRunning) return;
+                  ctx = new (window.AudioContext || window.webkitAudioContext)();
+                  isRunning = true;
+                  beat = 0;
+                  nextTime = ctx.currentTime + 0.05;
+                  scheduler();
+              }
+
+              function stop() {
+                  isRunning = false;
+                  if (ctx) ctx.close();
+              }
+
+              document.getElementById("start").onclick = start;
+              document.getElementById("stop").onclick = stop;
+          }, false);
+          </script>
+          </body>
+          </html>
+          EOF
+
+      - name: Build Android APK
+        run: |
+          cd metronome
+          cordova build android
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Metronome-APK
+          path: metronome/platforms/android/app/build/outputs/apk/debug/app-debug.apk
