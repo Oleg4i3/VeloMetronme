@@ -30,14 +30,16 @@ jobs:
           cd metronome
           cordova platform add android
           
-          # Устанавливаем только проверенные плагины
+          # Устанавливаем только нужные плагины
           cordova plugin add cordova-plugin-vibration
           cordova plugin add cordova-plugin-background-mode
 
-      - name: Create App Icon
+      - name: Get App Icon
         run: |
-          # Создаем 100% валидный PNG через встроенный ImageMagick, чтобы AAPT2 не крашился
-          convert -size 512x512 xc:"#f14f4d" -gravity center -pointsize 100 -fill white -annotate +0+0 "Velo" metronome/www/icon.png
+          # Никаких генераций! Просто качаем 100% валидный PNG по ссылке
+          mkdir -p metronome/res/icon/android
+          curl -L -o metronome/www/icon.png https://raw.githubusercontent.com/apache/cordova-app-hello-world/master/template_src/www/img/logo.png
+          cp metronome/www/icon.png metronome/res/icon/android/icon.png
 
       - name: Configure config.xml
         run: |
@@ -202,7 +204,6 @@ jobs:
       - name: Build Android APK
         run: |
           cd metronome
-          # Собираем дебаг-версию, чтобы её можно было сразу установить без подписи релизным ключом
           cordova build android --debug
 
       - name: Upload APK
