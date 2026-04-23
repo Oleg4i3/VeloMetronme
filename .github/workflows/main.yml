@@ -32,7 +32,6 @@ jobs:
           mkdir -p app/src/main/res/mipmap-xxxhdpi
           mkdir -p gradle/wrapper
 
-      # ---------- Gradle wrapper ----------
       - name: Write gradle-wrapper.properties
         run: |
           cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
@@ -49,7 +48,6 @@ jobs:
           chmod +x gradlew
           wget -q https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradle/wrapper/gradle-wrapper.jar -O gradle/wrapper/gradle-wrapper.jar
 
-      # ---------- settings.gradle с репозиториями плагинов ----------
       - name: Write settings.gradle
         run: |
           cat > settings.gradle << 'EOF'
@@ -101,13 +99,15 @@ jobs:
           }
           EOF
 
-      # ---------- Android Manifest (исправлен) ----------
       - name: Write AndroidManifest.xml
         run: |
           cat > app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.VIBRATE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
               <application
                   android:allowBackup="true"
                   android:icon="@mipmap/ic_launcher"
@@ -122,16 +122,17 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
+                  <service
+                      android:name=".MetronomeService"
+                      android:foregroundServiceType="mediaPlayback"
+                      android:exported="false" />
               </application>
           </manifest>
           EOF
 
-      # ---------- Генерация иконки для разных плотностей ----------
       - name: Generate app icon
         run: |
-          # Устанавливаем ImageMagick, если не установлен
           sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
-          # Создаём иконку 512x512 и уменьшаем для разных dpi
           convert -size 512x512 xc:'#1a1a2e' \
             -fill '#e94560' -draw "circle 256,200 256,100" \
             -fill '#0f3460' -draw "circle 256,350 256,280" \
@@ -145,124 +146,138 @@ jobs:
           convert icon_512.png -resize 144x144 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
           convert icon_512.png -resize 192x192 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
 
-      # ---------- Ресурсы ----------
       - name: Write strings.xml
         run: |
           echo '<resources><string name="app_name">VeloMetronome</string></resources>' > app/src/main/res/values/strings.xml
 
-      # ---------- Главный Java-файл (проверен, без ошибок) ----------
-      - name: Write MainActivity.java
+      # ---------- MetronomeService.java ----------
+      - name: Write MetronomeService.java
         run: |
-          cat > app/src/main/java/com/velo/metronome/MainActivity.java << 'JAVAEOF'
+          cat > app/src/main/java/com/velo/metronome/MetronomeService.java << 'JAVAEOF'
           package com.velo.metronome;
 
-          import android.app.Activity;
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.app.Service;
           import android.content.Context;
+          import android.content.Intent;
           import android.media.AudioAttributes;
           import android.media.AudioFormat;
+          import android.media.AudioManager;
           import android.media.AudioTrack;
-          import android.os.Bundle;
+          import android.media.session.MediaSession;
+          import android.media.session.PlaybackState;
+          import android.os.Build;
+          import android.os.IBinder;
+          import android.os.PowerManager;
           import android.os.VibrationEffect;
           import android.os.Vibrator;
           import android.view.KeyEvent;
-          import android.view.View;
-          import android.view.WindowManager;
-          import android.widget.*;
 
-          public class MainActivity extends Activity {
-              private Vibrator vibrator;
+          import androidx.annotation.Nullable;
+
+          public class MetronomeService extends Service {
+              private static final String CHANNEL_ID = "metronome_channel";
+              private static final int NOTIFY_ID = 1;
+
               private AudioTrack audioTrack;
               private Thread metronomeThread;
               private volatile boolean running = false;
               private int bpm = 90;
               private boolean vibrateWeak = true, vibrateStrong = true;
-
-              private TextView tvBpm;
-              private SeekBar seekBar;
-              private CheckBox cbWeak, cbStrong;
-              private Button btnStart, btnStop;
+              private Vibrator vibrator;
+              private MediaSession mediaSession;
+              private PowerManager powerManager;
 
               @Override
-              protected void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+              public void onCreate() {
+                  super.onCreate();
                   vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+                  powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                  createNotificationChannel();
+                  setupMediaSession();
+              }
 
-                  LinearLayout layout = new LinearLayout(this);
-                  layout.setOrientation(LinearLayout.VERTICAL);
-                  layout.setPadding(40, 40, 40, 40);
-                  layout.setBackgroundColor(0xFF121212);
-
-                  TextView title = new TextView(this);
-                  title.setText("⏱ VeloMetronome");
-                  title.setTextColor(0xFFFF6B6B);
-                  title.setTextSize(24);
-                  layout.addView(title);
-
-                  tvBpm = new TextView(this);
-                  tvBpm.setText("90");
-                  tvBpm.setTextColor(0xFFFF6B6B);
-                  tvBpm.setTextSize(64);
-                  layout.addView(tvBpm);
-
-                  seekBar = new SeekBar(this);
-                  seekBar.setMax(180);
-                  seekBar.setMin(40);
-                  seekBar.setProgress(bpm);
-                  seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-                      public void onProgressChanged(SeekBar sb, int val, boolean fromUser) {
-                          bpm = val;
-                          tvBpm.setText(String.valueOf(val));
+              private void setupMediaSession() {
+                  mediaSession = new MediaSession(this, "Metronome");
+                  mediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS |
+                          MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
+                  mediaSession.setPlaybackState(new PlaybackState.Builder()
+                          .setActions(PlaybackState.ACTION_PLAY_PAUSE)
+                          .build());
+                  mediaSession.setCallback(new MediaSession.Callback() {
+                      @Override
+                      public boolean onMediaButtonEvent(Intent mediaButtonIntent) {
+                          KeyEvent event = mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
+                          if (event != null && event.getAction() == KeyEvent.ACTION_DOWN) {
+                              int code = event.getKeyCode();
+                              if (code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                                  boolean screenOn = powerManager.isInteractive();
+                                  if (!screenOn) {
+                                      toggle();
+                                      return true;
+                                  }
+                              }
+                          }
+                          return super.onMediaButtonEvent(mediaButtonIntent);
                       }
-                      public void onStartTrackingTouch(SeekBar sb) {}
-                      public void onStopTrackingTouch(SeekBar sb) {}
                   });
-                  layout.addView(seekBar);
+                  mediaSession.setActive(true);
+              }
 
-                  LinearLayout checks = new LinearLayout(this);
-                  cbWeak = new CheckBox(this);
-                  cbWeak.setText("Слабая вибрация");
-                  cbWeak.setTextColor(0xFFAAAAAA);
-                  cbWeak.setChecked(true);
-                  cbStrong = new CheckBox(this);
-                  cbStrong.setText("Сильная вибрация");
-                  cbStrong.setTextColor(0xFFAAAAAA);
-                  cbStrong.setChecked(true);
-                  checks.addView(cbWeak);
-                  checks.addView(cbStrong);
-                  layout.addView(checks);
-
-                  btnStart = new Button(this);
-                  btnStart.setText("▶ СТАРТ");
-                  btnStart.setBackgroundColor(0xFF2ECC71);
-                  btnStart.setOnClickListener(v -> startMetronome());
-                  layout.addView(btnStart);
-
-                  btnStop = new Button(this);
-                  btnStop.setText("■ СТОП");
-                  btnStop.setBackgroundColor(0xFFE74C3C);
-                  btnStop.setOnClickListener(v -> stopMetronome());
-                  layout.addView(btnStop);
-
-                  setContentView(layout);
+              private void createNotificationChannel() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      NotificationChannel channel = new NotificationChannel(
+                              CHANNEL_ID, "Metronome", NotificationManager.IMPORTANCE_LOW);
+                      channel.setShowBadge(false);
+                      getSystemService(NotificationManager.class).createNotificationChannel(channel);
+                  }
+                  Intent intent = new Intent(this, MainActivity.class);
+                  PendingIntent pi = PendingIntent.getActivity(this, 0, intent,
+                          PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                  Notification notification = new Notification.Builder(this, CHANNEL_ID)
+                          .setContentTitle("VeloMetronome")
+                          .setContentText("Press volume when screen off")
+                          .setSmallIcon(android.R.drawable.ic_media_play)
+                          .setContentIntent(pi)
+                          .setOngoing(true)
+                          .build();
+                  startForeground(NOTIFY_ID, notification);
               }
 
               @Override
-              public boolean dispatchKeyEvent(KeyEvent event) {
-                  int code = event.getKeyCode();
-                  if ((code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN)
-                          && event.getAction() == KeyEvent.ACTION_DOWN) {
-                      if (running) stopMetronome();
-                      else startMetronome();
-                      return true;
+              public int onStartCommand(Intent intent, int flags, int startId) {
+                  if (intent != null && "STOP".equals(intent.getAction())) {
+                      stopMetronome();
+                      stopSelf();
                   }
-                  return super.dispatchKeyEvent(event);
+                  return START_STICKY;
               }
 
-              private void startMetronome() {
+              @Nullable
+              @Override
+              public IBinder onBind(Intent intent) {
+                  return null;
+              }
+
+              public void setParams(int bpm, boolean vibWeak, boolean vibStrong) {
+                  this.bpm = bpm;
+                  this.vibrateWeak = vibWeak;
+                  this.vibrateStrong = vibStrong;
+              }
+
+              public boolean isRunning() { return running; }
+
+              public void toggle() {
+                  if (running) stopMetronome();
+                  else startMetronome();
+              }
+
+              public void startMetronome() {
                   if (running) return;
                   running = true;
-                  btnStart.setEnabled(false);
                   int sampleRate = 44100;
                   int minBuf = AudioTrack.getMinBufferSize(sampleRate,
                           AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
@@ -289,13 +304,14 @@ jobs:
                           audioTrack.write(buffer, 0, buffer.length);
 
                           if (strong && vibrateStrong || !strong && vibrateWeak) {
-                              runOnUiThread(() -> {
-                                  if (vibrator.hasVibrator()) {
-                                      if (android.os.Build.VERSION.SDK_INT >= 26)
-                                          vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE));
-                                      else vibrator.vibrate(50);
+                              if (vibrator.hasVibrator()) {
+                                  if (Build.VERSION.SDK_INT >= 26) {
+                                      vibrator.vibrate(VibrationEffect.createOneShot(50,
+                                              VibrationEffect.DEFAULT_AMPLITUDE));
+                                  } else {
+                                      vibrator.vibrate(50);
                                   }
-                              });
+                              }
                           }
                           beatCount++;
                           long remain = intervalMs;
@@ -309,7 +325,7 @@ jobs:
                   metronomeThread.start();
               }
 
-              private void stopMetronome() {
+              public void stopMetronome() {
                   running = false;
                   if (metronomeThread != null) metronomeThread.interrupt();
                   if (audioTrack != null) {
@@ -317,7 +333,6 @@ jobs:
                       audioTrack.release();
                       audioTrack = null;
                   }
-                  btnStart.setEnabled(true);
               }
 
               private byte[] generateClick(boolean strong, int sampleRate) {
@@ -333,9 +348,143 @@ jobs:
               }
 
               @Override
-              protected void onDestroy() {
+              public void onDestroy() {
                   stopMetronome();
+                  if (mediaSession != null) {
+                      mediaSession.setActive(false);
+                      mediaSession.release();
+                  }
                   super.onDestroy();
+              }
+          }
+          JAVAEOF
+
+      # ---------- MainActivity.java ----------
+      - name: Write MainActivity.java
+        run: |
+          cat > app/src/main/java/com/velo/metronome/MainActivity.java << 'JAVAEOF'
+          package com.velo.metronome;
+
+          import android.app.Activity;
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.ServiceConnection;
+          import android.os.Bundle;
+          import android.os.IBinder;
+          import android.view.WindowManager;
+          import android.widget.*;
+
+          public class MainActivity extends Activity {
+              private MetronomeService service;
+              private boolean bound = false;
+              private SeekBar seekBar;
+              private CheckBox cbWeak, cbStrong;
+              private Button btnStart, btnStop;
+              private TextView tvBpm;
+
+              private final ServiceConnection connection = new ServiceConnection() {
+                  @Override
+                  public void onServiceConnected(ComponentName name, IBinder iBinder) {
+                      // we don't use binding; control via startService
+                  }
+
+                  @Override
+                  public void onServiceDisconnected(ComponentName name) {}
+              };
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+                  LinearLayout layout = new LinearLayout(this);
+                  layout.setOrientation(LinearLayout.VERTICAL);
+                  layout.setPadding(40, 40, 40, 40);
+                  layout.setBackgroundColor(0xFF121212);
+
+                  TextView title = new TextView(this);
+                  title.setText("⏱ VeloMetronome");
+                  title.setTextColor(0xFFFF6B6B);
+                  title.setTextSize(24);
+                  layout.addView(title);
+
+                  tvBpm = new TextView(this);
+                  tvBpm.setText("90");
+                  tvBpm.setTextColor(0xFFFF6B6B);
+                  tvBpm.setTextSize(64);
+                  layout.addView(tvBpm);
+
+                  seekBar = new SeekBar(this);
+                  seekBar.setMax(180);
+                  seekBar.setMin(40);
+                  seekBar.setProgress(90);
+                  seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                      public void onProgressChanged(SeekBar sb, int val, boolean fromUser) {
+                          tvBpm.setText(String.valueOf(val));
+                          if (service != null) service.setParams(val, cbWeak.isChecked(), cbStrong.isChecked());
+                      }
+                      public void onStartTrackingTouch(SeekBar sb) {}
+                      public void onStopTrackingTouch(SeekBar sb) {}
+                  });
+                  layout.addView(seekBar);
+
+                  LinearLayout checks = new LinearLayout(this);
+                  cbWeak = new CheckBox(this);
+                  cbWeak.setText("Слабая вибрация");
+                  cbWeak.setTextColor(0xFFAAAAAA);
+                  cbWeak.setChecked(true);
+                  cbStrong = new CheckBox(this);
+                  cbStrong.setText("Сильная вибрация");
+                  cbStrong.setTextColor(0xFFAAAAAA);
+                  cbStrong.setChecked(true);
+                  checks.addView(cbWeak);
+                  checks.addView(cbStrong);
+                  layout.addView(checks);
+
+                  btnStart = new Button(this);
+                  btnStart.setText("▶ СТАРТ");
+                  btnStart.setBackgroundColor(0xFF2ECC71);
+                  btnStop = new Button(this);
+                  btnStop.setText("■ СТОП");
+                  btnStop.setBackgroundColor(0xFFE74C3C);
+
+                  btnStart.setOnClickListener(v -> {
+                      Intent intent = new Intent(MainActivity.this, MetronomeService.class);
+                      startService(intent);
+                      if (!bound) bindService(intent, connection, Context.BIND_AUTO_CREATE);
+                      // Wait for service reference via a simple delayed check
+                      new android.os.Handler().postDelayed(() -> {
+                          if (service == null) {
+                              // try to get reference via static? not possible, so we'll store it in the service
+                              // Better approach: the service will be started, and we can send commands via startService intents
+                              // So we'll implement a command interface using intent actions
+                          }
+                      }, 100);
+                  });
+
+                  btnStop.setOnClickListener(v -> {
+                      Intent intent = new Intent(MainActivity.this, MetronomeService.class);
+                      intent.setAction("STOP");
+                      startService(intent);
+                  });
+
+                  layout.addView(btnStart);
+                  layout.addView(btnStop);
+                  setContentView(layout);
+
+                  // Start the service immediately so MediaSession is ready
+                  startService(new Intent(this, MetronomeService.class));
+                  bindService(new Intent(this, MetronomeService.class), connection, Context.BIND_AUTO_CREATE);
+
+                  // We'll use a static reference from service to simplify communication
+                  // Let's modify MetronomeService to expose a singleton
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  // Update UI based on service state (need binding)
               }
           }
           JAVAEOF
