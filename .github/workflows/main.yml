@@ -29,159 +29,166 @@ jobs:
           cordova create metronome com.velo.metronome VeloMetronome
           cd metronome
           cordova platform add android
+          
+          # Плагины: вибрация, фоновый режим (для работы с выключенным экраном)
           cordova plugin add cordova-plugin-vibration
           cordova plugin add cordova-plugin-background-mode
 
-      - name: Setup Icon
+      - name: Download Bicycle Wheel Icon
         run: |
           mkdir -p metronome/res/icon/android
-          # Качаем стандартную иконку, чтобы компилятор Android (AAPT2) не выдавал ошибок
-          curl -L -o metronome/www/icon.png https://raw.githubusercontent.com/apache/cordova-app-hello-world/master/template_src/www/img/logo.png
-          cp metronome/www/icon.png metronome/res/icon/android/icon.png
+          # Скачиваем стабильный PNG иконки велосипедного колеса
+          curl -L -o metronome/res/icon/android/icon.png "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e5/Bicycle_wheel_icon.svg/512px-Bicycle_wheel_icon.svg.png"
+          cp metronome/res/icon/android/icon.png metronome/www/icon.png
 
       - name: Configure config.xml
         run: |
           cat << 'EOF' > metronome/config.xml
           <?xml version='1.0' encoding='utf-8'?>
-          <widget id="com.velo.metronome" version="1.0.0" xmlns="http://www.w3.org/ns/widgets">
-              <name>VeloMetronome</name>
-              <description>Bicycle Cadence Metronome</description>
-              <content src="index.html" />
-              <access origin="*" />
-              <allow-intent href="http://*/*" />
-              <allow-intent href="https://*/*" />
-              <preference name="Orientation" value="portrait" />
-              <preference name="KeepRunning" value="true" />
-              <icon src="www/icon.png" />
+          <widget id="com.velo.metronome" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+            <name>VeloMetronome</name>
+            <description>Bicycle Cadence Metronome</description>
+            <author email="dev@velo.metronome" href="http://cordova.io">Developer</author>
+            <content src="index.html" />
+            <preference name="AndroidWindowSplashScreenAnimatedIcon" value="res/icon/android/icon.png" />
+            <preference name="AndroidWindowSplashScreenBackground" value="#0D1117" />
+            <preference name="DisallowOverscroll" value="true" />
+            <preference name="Orientation" value="portrait" />
+            <preference name="Fullscreen" value="false" />
+            <platform name="android">
+              <icon density="mdpi" src="res/icon/android/icon.png" />
+              <icon density="hdpi" src="res/icon/android/icon.png" />
+              <icon density="xhdpi" src="res/icon/android/icon.png" />
+              <icon density="xxhdpi" src="res/icon/android/icon.png" />
+              <icon density="xxxhdpi" src="res/icon/android/icon.png" />
+            </platform>
           </widget>
           EOF
 
       - name: Write Application Source
         run: |
-          cat << 'EOF' > metronome/www/index.html
-          <!doctype html>
-          <html>
+          cat << 'HTMLEOF' > metronome/www/index.html
+          <!DOCTYPE html>
+          <html lang="ru">
           <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
-          <title>VeloMetronome</title>
-          <style>
-          body { font-family: sans-serif; padding: 30px; background:#000; color:#fff; text-align:center; }
-          button { width: 100%; padding: 25px; font-size: 24px; margin: 15px 0; border: none; border-radius: 10px; color: white; font-weight: bold; }
-          #start { background: #28a745; }
-          #stop { background: #dc3545; }
-          input[type=range] { width: 100%; height: 60px; margin: 20px 0; }
-          h2 { color: #f14f4d; margin-bottom: 0; }
-          .bpm-display { font-size: 72px; font-weight: bold; margin: 10px 0; color: #f14f4d; }
-          .hint { font-size: 14px; color: #666; margin-top: 20px; }
-          </style>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+            <title>VeloMetronome</title>
+            <style>
+              :root { --bg: #0D1117; --text: #E6EDF3; --accent: #58A6FF; --stop: #F85149; }
+              body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+              h1 { margin: 0 0 10px; font-size: 28px; }
+              #bpm-display { font-size: 48px; font-weight: 800; color: var(--accent); margin: 10px 0; }
+              input[type="range"] { width: 100%; max-width: 300px; height: 8px; accent-color: var(--accent); }
+              button { background: var(--accent); color: #000; border: none; padding: 16px 40px; font-size: 22px; font-weight: bold; border-radius: 12px; margin: 20px 0; cursor: pointer; width: 100%; max-width: 300px; }
+              button.stop { background: var(--stop); color: #fff; }
+              .vib-controls { margin: 15px 0; text-align: left; width: 100%; max-width: 300px; }
+              label { display: flex; align-items: center; gap: 10px; font-size: 16px; margin: 8px 0; cursor: pointer; }
+              input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent); }
+              .hint { color: #8B949E; font-size: 12px; text-align: center; margin-top: 20px; line-height: 1.4; }
+            </style>
           </head>
           <body>
-          <h2>VeloMetronome</h2>
-          <div class="bpm-display" id="bpmVal">90</div>
-          <input id="bpm" type="range" min="40" max="180" value="90">
-          <button id="start">START</button>
-          <button id="stop">STOP</button>
-          <div class="hint">В кармане: кнопка громкости = Вкл/Выкл</div>
-          
-          <audio id="silentAudio" loop src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
+            <h1>🚲 VeloMetronome</h1>
+            <div id="bpm-display">90 BPM</div>
+            <input type="range" id="bpm-slider" min="40" max="220" value="90" step="1">
+            <button id="toggle-btn">START</button>
+            
+            <div class="vib-controls">
+              <label><input type="checkbox" id="vib-strong" checked> Сильная доля (вибрация)</label>
+              <label><input type="checkbox" id="vib-weak"> Слабая доля (вибрация)</label>
+            </div>
+            
+            <div class="hint">🔊 Громкость: Старт/Стоп<br>(для работы при выключенном экране отключите оптимизацию батареи для приложения)</div>
 
-          <script src="cordova.js"></script>
-          <script>
-          // Высокоточный таймер в отдельном потоке
-          const workerCode = `
-              let timer = null;
-              self.onmessage = function(e) {
-                  if (e.data === 'start') timer = setInterval(() => postMessage('tick'), 25);
-                  else if (e.data === 'stop') clearInterval(timer);
-              };
-          `;
-          const timerWorker = new Worker(URL.createObjectURL(new Blob([workerCode])));
+            <script>
+              let isPlaying = false, timer = null, beat = 0;
+              const bpmSlider = document.getElementById('bpm-slider');
+              const bpmDisplay = document.getElementById('bpm-display');
+              const toggleBtn = document.getElementById('toggle-btn');
+              const vibStrong = document.getElementById('vib-strong');
+              const vibWeak = document.getElementById('vib-weak');
+              const ctx = new (window.AudioContext || window.webkitAudioContext)();
 
-          document.addEventListener('deviceready', () => {
-              let ctx, isRunning = false, beat = 0, nextTime = 0;
-              let isScreenOff = false;
+              bpmSlider.addEventListener('input', () => {
+                bpmDisplay.textContent = bpmSlider.value + ' BPM';
+                if (isPlaying) {
+                  clearInterval(timer);
+                  const interval = 60000 / parseInt(bpmSlider.value);
+                  timer = setInterval(tick, interval);
+                }
+              });
 
-              const bpmSlider = document.getElementById("bpm");
-              const bpmVal = document.getElementById("bpmVal");
-              const silentAudio = document.getElementById("silentAudio");
-
-              // Включаем фоновый режим
-              cordova.plugins.backgroundMode.enable();
-              cordova.plugins.backgroundMode.setDefaults({ silent: true });
-
-              document.addEventListener('pause', () => { isScreenOff = true; }, false);
-              document.addEventListener('resume', () => { isScreenOff = false; }, false);
-
-              // УПРАВЛЕНИЕ ГРОМКОСТЬЮ ПРИ ВЫКЛЮЧЕННОМ ЭКРАНЕ
-              const handleVolume = () => {
-                  if (isScreenOff) { 
-                      toggle(); 
-                  }
-              };
-              document.addEventListener('volumeupbutton', handleVolume, false);
-              document.addEventListener('volumedownbutton', handleVolume, false);
-
-              bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
-
-              function playSound(time, freq, vol) {
-                  const osc = ctx.createOscillator();
-                  const g = ctx.createGain();
-                  osc.type = 'square';
-                  osc.frequency.value = freq;
-                  g.gain.setValueAtTime(vol, time);
-                  g.gain.exponentialRampToValueAtTime(0.001, time + 0.1);
-                  osc.connect(g); g.connect(ctx.destination);
-                  osc.start(time); osc.stop(time + 0.1);
+              function playBeep(isStrong) {
+                if (ctx.state === 'suspended') ctx.resume();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = isStrong ? 1200 : 800;
+                gain.gain.setValueAtTime(0.5, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.05);
               }
 
-              timerWorker.onmessage = () => {
-                  if (!isRunning) return;
-                  const interval = 60 / parseInt(bpmSlider.value);
-                  while (nextTime < ctx.currentTime + 0.1) {
-                      beat++;
-                      const isStrong = (beat % 2 !== 0);
-                      
-                      // Звук: сильная доля выше, слабая ниже
-                      playSound(nextTime, isStrong ? 1200 : 800, isStrong ? 0.5 : 0.3);
+              function tick() {
+                const isStrong = beat % 4 === 0; // Размер 4/4
+                playBeep(isStrong);
 
-                      // 1) ВИБРО НА ВТОРУЮ (СЛАБУЮ) ДОЛЮ
-                      if (!isStrong) {
-                          const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
-                          setTimeout(() => {
-                              if (navigator.vibrate) navigator.vibrate(60);
-                          }, delay);
-                      }
-                      nextTime += interval;
-                  }
-              };
-
-              function toggle() { isRunning ? stop() : start(); }
-
-              function start() {
-                  if (isRunning) return;
-                  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-                  ctx.resume();
-                  silentAudio.play().catch(() => {});
-                  isRunning = true; beat = 0; nextTime = ctx.currentTime + 0.05;
-                  timerWorker.postMessage('start');
-                  document.getElementById("start").style.boxShadow = "0 0 20px white";
+                if (isStrong && vibStrong.checked) {
+                  navigator.vibrate(65);
+                } else if (!isStrong && vibWeak.checked) {
+                  navigator.vibrate(25);
+                }
+                beat++;
               }
 
-              function stop() {
-                  isRunning = false;
-                  timerWorker.postMessage('stop');
-                  silentAudio.pause();
-                  document.getElementById("start").style.boxShadow = "none";
+              function toggleMetronome() {
+                if (isPlaying) {
+                  clearInterval(timer);
+                  isPlaying = false;
+                  toggleBtn.textContent = 'START';
+                  toggleBtn.classList.remove('stop');
+                  navigator.vibrate(0);
+                } else {
+                  if (ctx.state === 'suspended') ctx.resume();
+                  beat = 0;
+                  isPlaying = true;
+                  toggleBtn.textContent = 'STOP';
+                  toggleBtn.classList.add('stop');
+                  const interval = 60000 / parseInt(bpmSlider.value);
+                  tick();
+                  timer = setInterval(tick, interval);
+                }
               }
 
-              document.getElementById("start").onclick = start;
-              document.getElementById("stop").onclick = stop;
-          }, false);
-          </script>
+              toggleBtn.addEventListener('click', toggleMetronome);
+
+              // Инициализация Cordova
+              document.addEventListener('deviceready', function() {
+                // Фоновый режим для сохранения работы JS при выключенном экране
+                if (cordova.plugins && cordova.plugins.backgroundMode) {
+                  cordova.plugins.backgroundMode.setDefaults({
+                    title: 'VeloMetronome',
+                    text: 'Метроном активен...',
+                    silent: true,
+                    resume: true,
+                    hidden: true
+                  });
+                  cordova.plugins.backgroundMode.enable();
+                  cordova.plugins.backgroundMode.disableWebViewOptimizations();
+                }
+
+                // Слушатели кнопок громкости
+                document.addEventListener('volumeupbutton', toggleMetronome, false);
+                document.addEventListener('volumedownbutton', toggleMetronome, false);
+              }, false);
+            </script>
           </body>
           </html>
-          EOF
+          HTMLEOF
 
       - name: Build Android APK
         run: |
