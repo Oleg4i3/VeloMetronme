@@ -29,12 +29,7 @@ jobs:
           cordova create metronome com.example.metronome Metronome
           cd metronome
           cordova platform add android
-          
-          # Плагин вибрации
           cordova plugin add cordova-plugin-vibration
-          
-          # Современный форк плагина для фона (не крашит Android 12+)
-          cordova plugin add cordova-plugin-advanced-background-mode
 
       - name: Write Application Source
         run: |
@@ -43,7 +38,7 @@ jobs:
           <html>
           <head>
           <meta charset="utf-8">
-          <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: gap: https://ssl.gstatic.com 'unsafe-eval' 'unsafe-inline'; media-src *; img-src 'self' data: content:;">
+          <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: gap: https://ssl.gstatic.com 'unsafe-eval' 'unsafe-inline' blob:; media-src * data:; img-src 'self' data: content:;">
           <meta name="format-detection" content="telephone=no">
           <meta name="msapplication-tap-highlight" content="no">
           <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
@@ -62,44 +57,45 @@ jobs:
           <button id="start">Start</button>
           <button id="stop">Stop</button>
 
+          <audio id="silentAudio" loop src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA" style="display:none;"></audio>
+
           <script src="cordova.js"></script>
           <script>
+          // 2. Web Worker: независимый от UI поток для точного таймера в фоне
+          const workerCode = `
+              let timer = null;
+              self.onmessage = function(e) {
+                  if (e.data === 'start') {
+                      timer = setInterval(() => postMessage('tick'), 25);
+                  } else if (e.data === 'stop') {
+                      clearInterval(timer);
+                  }
+              };
+          `;
+          const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+          const timerWorker = new Worker(URL.createObjectURL(workerBlob));
+
           document.addEventListener('deviceready', function() {
               let ctx;
               let isRunning = false;
               let beat = 0;
               let nextTime = 0;
-              let schedulerTimer;
               let lastVolumeClickTime = 0;
-
-              // 1. Настройка фонового режима для стабильной работы с выключенным экраном
-              cordova.plugins.backgroundMode.setDefaults({
-                  title: 'Metronome Running',
-                  text: 'Cadence metronome is active',
-                  icon: 'icon',
-                  color: 'F14F4D',
-                  resume: true,
-                  hidden: false
-              });
-              cordova.plugins.backgroundMode.enable();
-              
-              cordova.plugins.backgroundMode.on('activate', function() {
-                  // Отключаем остановку JS движка
-                  cordova.plugins.backgroundMode.disableWebViewOptimizations();
-              });
-
-              // 2. Предотвращение краша при принудительном закрытии (свайп из недавних)
-              window.addEventListener('beforeunload', () => {
-                  if(cordova.plugins.backgroundMode.isActive()) {
-                      cordova.plugins.backgroundMode.disable();
-                  }
-              });
 
               const bpmSlider = document.getElementById("bpm");
               const bpmVal = document.getElementById("bpmVal");
+              const silentAudio = document.getElementById("silentAudio");
+
               bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
 
-              // --- Ваш улучшенный звуковой синтезатор ---
+              // Защита от краша: принудительно восстанавливаем AudioContext при разблокировке экрана
+              document.addEventListener('resume', () => {
+                  if (ctx && ctx.state === 'suspended') {
+                      ctx.resume();
+                  }
+              }, false);
+
+              // --- Звуковой синтезатор ---
               function noiseBuffer(ctx, duration=0.06) {
                   const rate = ctx.sampleRate;
                   const buffer = ctx.createBuffer(1, rate * duration, rate);
@@ -140,63 +136,76 @@ jobs:
                   gain.connect(comp);
                   comp.connect(ctx.destination);
 
-                  // Запуск воспроизведения строго в назначенное время аппаратного AudioContext
                   source.start(time);
               }
 
-              // --- Точный планировщик для фонового режима ---
               function scheduler() {
-                  if (!isRunning) return;
-
                   const bpm = parseInt(bpmSlider.value);
                   const interval = 60 / bpm;
 
-                  // Планируем удары немного наперед, чтобы нивелировать лаги JS в фоне
                   while (nextTime < ctx.currentTime + 0.1) {
                       beat++;
                       const strong = (beat % 2 === 1);
                       playBeat(nextTime, strong);
+
+                      if (!strong) {
+                          const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
+                          setTimeout(() => {
+                              if (navigator.vibrate) navigator.vibrate(40);
+                          }, delay);
+                      }
                       nextTime += interval;
                   }
-                  
-                  // Короткий setTimeout, который благодаря фоновому плагину не будет спать
-                  schedulerTimer = setTimeout(scheduler, 25);
               }
+
+              // Web Worker вызывает эту функцию каждые 25мс независимо от того, спит ли основной UI
+              timerWorker.onmessage = function(e) {
+                  if (e.data === 'tick' && isRunning) {
+                      scheduler();
+                  }
+              };
 
               function toggleMetronome() {
                   if (isRunning) stop();
                   else start();
               }
 
-              // 3. Обработка двойного нажатия громкости
+              // --- Двойное нажатие громкости (<500 мс) ---
               function handleVolumeButton() {
                   const currentTime = new Date().getTime();
-                  // Если разница между кликами меньше 500 мс — это двойное нажатие
                   if (currentTime - lastVolumeClickTime < 500) {
                       toggleMetronome();
-                      lastVolumeClickTime = 0; // Сбрасываем таймер
+                      lastVolumeClickTime = 0;
                   } else {
                       lastVolumeClickTime = currentTime;
                   }
               }
 
-              // Подписка на кнопки громкости (работает, пока экран включен, либо когда активен backgroundMode)
+              // Обработчики кнопок громкости
               document.addEventListener("volumeupbutton", handleVolumeButton, false);
               document.addEventListener("volumedownbutton", handleVolumeButton, false);
 
               function start() {
                   if (isRunning) return;
-                  ctx = new (window.AudioContext || window.webkitAudioContext)();
+                  
+                  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+                  if (ctx.state === 'suspended') ctx.resume();
+
+                  // Запускаем тихий трек для блокировки "сна" устройства
+                  silentAudio.play().catch(e => console.log("Audio lock failed:", e));
+
                   isRunning = true;
                   beat = 0;
                   nextTime = ctx.currentTime + 0.05;
-                  scheduler();
+                  
+                  // Запускаем планировщик в Worker
+                  timerWorker.postMessage('start');
               }
 
               function stop() {
                   isRunning = false;
-                  clearTimeout(schedulerTimer);
-                  if (ctx) ctx.close();
+                  timerWorker.postMessage('stop');
+                  silentAudio.pause();
               }
 
               document.getElementById("start").onclick = start;
