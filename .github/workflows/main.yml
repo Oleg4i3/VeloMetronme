@@ -29,17 +29,12 @@ jobs:
           cordova create metronome com.example.metronome Metronome
           cd metronome
           
-          # Добавляем платформу ПЕРЕД плагинами для корректной инициализации структуры
           cordova platform add android
           
-          # Установка проверенных плагинов
           cordova plugin add cordova-plugin-vibration
           cordova plugin add cordova-plugin-background-mode
           
-          # Исправление для Android 12+ (Foreground Service Type)
-          # Напрямую модифицируем манифест через sed для гарантии работы в фоне
-          sed -i '/<service android:name="de.appplant.cordova.plugin.background.ForegroundService" \/>/c\<service android:name="de.appplant.cordova.plugin.background.ForegroundService" android:foregroundServiceType="mediaPlayback" \/>' platforms/android/app/src/main/AndroidManifest.xml || true
-
+          # Используем edit-config вместо sed, чтобы избежать дублирования в AndroidManifest
           cat << 'EOF' > config.xml
           <?xml version='1.0' encoding='utf-8'?>
           <widget id="com.example.metronome" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0" xmlns:android="http://schemas.android.com/apk/res/android">
@@ -49,6 +44,9 @@ jobs:
               <preference name="KeepRunning" value="true"/>
               <preference name="AndroidXEnabled" value="true"/>
               <platform name="android">
+                  <edit-config file="app/src/main/AndroidManifest.xml" mode="merge" target="/manifest/application/service[@android:name='de.appplant.cordova.plugin.background.ForegroundService']">
+                      <service android:foregroundServiceType="mediaPlayback" />
+                  </edit-config>
                   <config-file target="AndroidManifest.xml" parent="/*">
                       <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
                       <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
@@ -98,14 +96,12 @@ jobs:
                   cordova.plugins.backgroundMode.enable();
                   cordova.plugins.backgroundMode.setDefaults({
                       title: 'Metronome',
-                      text: 'Metronome is running',
-                      icon: 'icon',
+                      text: 'Metronome is active',
                       resume: true,
                       hidden: false
                   });
               }
 
-              // Обработка кнопок громкости без внешних плагинов (встроенно в Cordova)
               function handleVol() {
                   const now = Date.now();
                   if (now - lastVolTime < 500) {
@@ -123,13 +119,10 @@ jobs:
               function playBeat(time, isStrong) {
                   const osc = ctx.createOscillator();
                   const gain = ctx.createGain();
-                  
                   osc.type = 'sine';
                   osc.frequency.setValueAtTime(isStrong ? 1000 : 600, time);
-                  
-                  gain.gain.setValueAtTime(0.5, time);
+                  gain.gain.setValueAtTime(0.4, time);
                   gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
-                  
                   osc.connect(gain);
                   gain.connect(ctx.destination);
                   osc.start(time);
@@ -143,10 +136,9 @@ jobs:
                       beat++;
                       const isStrong = (beat % 2 === 1);
                       playBeat(nextTime, isStrong);
-
-                      if (!isStrong) { // Вибро на слабую долю
+                      if (!isStrong) {
                           const delay = (nextTime - ctx.currentTime) * 1000;
-                          setTimeout(() => { if(navigator.vibrate) navigator.vibrate(30); }, Math.max(0, delay));
+                          setTimeout(() => { if(navigator.vibrate) navigator.vibrate(40); }, Math.max(0, delay));
                       }
                       nextTime += interval;
                   }
@@ -178,7 +170,6 @@ jobs:
       - name: Build Android APK
         run: |
           cd metronome
-          # Принудительная сборка debug версии, так как она не требует подписи для генерации файла
           cordova build android --debug
 
       - name: Upload APK
