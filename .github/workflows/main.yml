@@ -30,15 +30,14 @@ jobs:
           cd metronome
           cordova platform add android
           
-          # Устанавливаем только реально существующие и нужные плагины
+          # Устанавливаем только проверенные плагины
           cordova plugin add cordova-plugin-vibration
           cordova plugin add cordova-plugin-background-mode
 
       - name: Create App Icon
         run: |
-          mkdir -p metronome/res/icon/android
-          echo "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH5gMREh0XzD99VAAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLm3EAAABEUlEQVR42u3dsQ3CQBQE0S9ncA50QAt0QS00QCf0XwjSByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SB5n5R5pX3O7pAAAAAElFTkSuQmCC" | base64 -d > metronome/www/icon.png
-          cp metronome/www/icon.png metronome/res/icon/android/icon.png
+          # Создаем 100% валидный PNG через встроенный ImageMagick, чтобы AAPT2 не крашился
+          convert -size 512x512 xc:"#f14f4d" -gravity center -pointsize 100 -fill white -annotate +0+0 "Velo" metronome/www/icon.png
 
       - name: Configure config.xml
         run: |
@@ -108,7 +107,6 @@ jobs:
               const bpmVal = document.getElementById("bpmVal");
               const silentAudio = document.getElementById("silentAudio");
 
-              // Настройка фонового режима
               if (cordova.plugins.backgroundMode) {
                   cordova.plugins.backgroundMode.enable();
                   cordova.plugins.backgroundMode.setDefaults({ silent: true });
@@ -120,9 +118,8 @@ jobs:
                   if (ctx && ctx.state === 'suspended') ctx.resume();
               }, false);
 
-              // Обработка громкости
               function handleVolume(e) {
-                  if (!isPaused) return; // Если экран горит, ничего не перехватываем (громкость меняется штатно)
+                  if (!isPaused) return; 
                   
                   const now = Date.now();
                   if (now - lastVolTime < 600) {
@@ -133,7 +130,6 @@ jobs:
                   }
               }
               
-              // Cordova "из коробки" слушает эти аппаратные события
               document.addEventListener('volumeupbutton', handleVolume, false);
               document.addEventListener('volumedownbutton', handleVolume, false);
 
@@ -166,7 +162,6 @@ jobs:
                       const isStrong = (beat % 2 === 1);
                       playBeat(nextTime, isStrong);
                       
-                      // ВИБРО НА СЛАБУЮ ДОЛЮ
                       if (!isStrong) {
                           const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
                           setTimeout(() => { 
@@ -207,10 +202,11 @@ jobs:
       - name: Build Android APK
         run: |
           cd metronome
-          cordova build android --release
+          # Собираем дебаг-версию, чтобы её можно было сразу установить без подписи релизным ключом
+          cordova build android --debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: VeloMetronome-APK
-          path: metronome/platforms/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          path: metronome/platforms/android/app/build/outputs/apk/debug/app-debug.apk
