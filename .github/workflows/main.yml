@@ -193,7 +193,7 @@ jobs:
             <button id="start">▶ START</button>
             <button id="stop">⏹ STOP</button>
             <div class="status">
-              💡 Кнопки громкости: Toggle при выключенном экране
+              💡 Экран выключен – кнопки громкости = СТАРТ/СТОП
             </div>
           </div>
           
@@ -228,22 +228,31 @@ jobs:
                   });
               }
 
-              // Обработка кнопок громкости при выключенном экране
-              function handleVolumeKeys() {
-                  document.addEventListener('volumeupbutton', function(e) {
-                      if (document.hidden || !document.hasFocus()) {
-                          toggle();
-                      }
-                  }, false);
-                  
-                  document.addEventListener('volumedownbutton', function(e) {
-                      if (document.hidden || !document.hasFocus()) {
-                          toggle();
-                      }
-                  }, false);
-              }
+              // Динамическое переключение режима кнопок громкости
+              document.addEventListener('pause', function() {
+                  // Экран выключен – перехватываем кнопки громкости
+                  if (cordova.plugins.backgroundMode) {
+                      cordova.plugins.backgroundMode.overrideVolumeButtons(true);
+                  }
+              }, false);
 
-              handleVolumeKeys();
+              document.addEventListener('resume', function() {
+                  // Экран включен – возвращаем стандартное поведение
+                  if (cordova.plugins.backgroundMode) {
+                      cordova.plugins.backgroundMode.overrideVolumeButtons(false);
+                  }
+                  // Возобновляем аудиоконтекст, если был
+                  if (ctx && ctx.state === 'suspended') ctx.resume();
+              }, false);
+
+              // Обработка нажатий громкости (сработает только когда перехват включен)
+              document.addEventListener('volumeupbutton', function() {
+                  toggle();
+              }, false);
+              
+              document.addEventListener('volumedownbutton', function() {
+                  toggle();
+              }, false);
 
               bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
 
@@ -274,14 +283,18 @@ jobs:
                       const isStrong = (beat % 2 === 1);
                       playBeat(nextTime, isStrong);
                       
-                      // Синхронная вибрация
+                      // Вибрация с использованием плагина (гарантированно работает в фоне)
                       const shouldVibrate = (isStrong && vibrateStrongCheck.checked) || 
                                           (!isStrong && vibrateWeakCheck.checked);
                       
                       if (shouldVibrate) {
                           const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
                           setTimeout(() => { 
-                              if(navigator.vibrate) navigator.vibrate(50); 
+                              if (window.navigator && window.navigator.notification && window.navigator.notification.vibrate) {
+                                  window.navigator.notification.vibrate(50);
+                              } else if (window.navigator && window.navigator.vibrate) {
+                                  window.navigator.vibrate(50);
+                              }
                           }, delay);
                       }
                       nextTime += interval;
