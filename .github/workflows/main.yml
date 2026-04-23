@@ -29,13 +29,17 @@ jobs:
           cordova create metronome com.example.metronome Metronome
           cd metronome
           
-          # Используем стабильные плагины для фоновой работы и вибрации
+          # Добавляем платформу ПЕРЕД плагинами для корректной инициализации структуры
+          cordova platform add android
+          
+          # Установка проверенных плагинов
           cordova plugin add cordova-plugin-vibration
           cordova plugin add cordova-plugin-background-mode
           
-          # Заменяем несуществующий плагин на нативную поддержку аппаратных кнопок через конфигурацию
-          # В Cordova кнопки громкости перехватываются стандартными событиями window.addEventListener
-          
+          # Исправление для Android 12+ (Foreground Service Type)
+          # Напрямую модифицируем манифест через sed для гарантии работы в фоне
+          sed -i '/<service android:name="de.appplant.cordova.plugin.background.ForegroundService" \/>/c\<service android:name="de.appplant.cordova.plugin.background.ForegroundService" android:foregroundServiceType="mediaPlayback" \/>' platforms/android/app/src/main/AndroidManifest.xml || true
+
           cat << 'EOF' > config.xml
           <?xml version='1.0' encoding='utf-8'?>
           <widget id="com.example.metronome" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0" xmlns:android="http://schemas.android.com/apk/res/android">
@@ -43,6 +47,7 @@ jobs:
               <content src="index.html" />
               <access origin="*" />
               <preference name="KeepRunning" value="true"/>
+              <preference name="AndroidXEnabled" value="true"/>
               <platform name="android">
                   <config-file target="AndroidManifest.xml" parent="/*">
                       <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -53,8 +58,6 @@ jobs:
               </platform>
           </widget>
           EOF
-          
-          cordova platform add android
 
       - name: Write Application Source
         run: |
@@ -68,16 +71,17 @@ jobs:
           <title>Metronome</title>
           <style>
           body { font-family: sans-serif; padding: 20px; background:#111; color:#eee; text-align: center; }
-          button { font-size: 24px; margin: 10px; padding: 10px 20px; width: 80%; }
-          input[type=range]{ width: 100%; height: 40px; }
-          #bpmVal { font-weight: bold; font-size: 2em; color: #0f0; }
+          button { font-size: 24px; margin: 10px; padding: 15px; width: 80%; border-radius: 8px; border: none; background: #444; color: white; }
+          #start { background: #282; }
+          #stop { background: #822; }
+          input[type=range]{ width: 100%; height: 50px; }
+          #bpmVal { font-weight: bold; font-size: 3em; color: #0f0; display: block; margin: 10px; }
           </style>
           </head>
           <body>
           <h2>Metronome</h2>
-          <div>BPM: <span id="bpmVal">90</span></div>
+          <span id="bpmVal">90</span>
           <input id="bpm" type="range" min="40" max="200" value="90">
-          <br>
           <button id="start">START</button>
           <button id="stop">STOP</button>
           
@@ -88,94 +92,65 @@ jobs:
               let isRunning = false;
               let beat = 0;
               let nextTime = 0;
-              let lastClickTime = 0;
+              let lastVolTime = 0;
 
-              // Настройка фонового режима
               if (window.cordova && cordova.plugins.backgroundMode) {
                   cordova.plugins.backgroundMode.enable();
-                  cordova.plugins.backgroundMode.overrideBackButton();
                   cordova.plugins.backgroundMode.setDefaults({
                       title: 'Metronome',
-                      text: 'Active in background',
+                      text: 'Metronome is running',
                       icon: 'icon',
-                      color: 'F1F1F1',
                       resume: true,
-                      hidden: false,
-                      bigText: true
+                      hidden: false
                   });
               }
 
-              // Перехват кнопок громкости
-              function onVolumeButton() {
+              // Обработка кнопок громкости без внешних плагинов (встроенно в Cordova)
+              function handleVol() {
                   const now = Date.now();
-                  if (now - lastClickTime < 500) {
+                  if (now - lastVolTime < 500) {
                       if (isRunning) stop(); else start();
                   }
-                  lastClickTime = now;
+                  lastVolTime = now;
               }
-
-              document.addEventListener("volumeupbutton", onVolumeButton, false);
-              document.addEventListener("volumedownbutton", onVolumeButton, false);
+              document.addEventListener("volumeupbutton", handleVol, false);
+              document.addEventListener("volumedownbutton", handleVol, false);
 
               const bpmSlider = document.getElementById("bpm");
               const bpmVal = document.getElementById("bpmVal");
-
-              bpmSlider.addEventListener("input", () => {
-                  bpmVal.textContent = bpmSlider.value;
-              });
-
-              function noiseBuffer(ctx, duration=0.06) {
-                  const rate = ctx.sampleRate;
-                  const buffer = ctx.createBuffer(1, rate * duration, rate);
-                  const data = buffer.getChannelData(0);
-                  for (let i = 0; i < data.length; i++) {
-                      data[i] = (Math.random()*2 - 1) * 0.8;
-                  }
-                  return buffer;
-              }
+              bpmSlider.oninput = () => { bpmVal.textContent = bpmSlider.value; };
 
               function playBeat(time, isStrong) {
-                  const source = ctx.createBufferSource();
-                  source.buffer = noiseBuffer(ctx, isStrong ? 0.09 : 0.05);
-
-                  const filter = ctx.createBiquadFilter();
-                  filter.type = "bandpass";
-                  filter.frequency.value = isStrong ? 2200 : 1400;
-                  filter.Q.value = 6;
-
+                  const osc = ctx.createOscillator();
                   const gain = ctx.createGain();
-                  gain.gain.value = isStrong ? 1.5 : 0.8;
-
-                  source.connect(filter);
-                  filter.connect(gain);
+                  
+                  osc.type = 'sine';
+                  osc.frequency.setValueAtTime(isStrong ? 1000 : 600, time);
+                  
+                  gain.gain.setValueAtTime(0.5, time);
+                  gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+                  
+                  osc.connect(gain);
                   gain.connect(ctx.destination);
-
-                  source.start(time);
+                  osc.start(time);
+                  osc.stop(time + 0.1);
               }
 
               function scheduler() {
                   if (!isRunning) return;
-
-                  const bpm = parseInt(bpmSlider.value);
-                  const interval = 60 / bpm;
-
+                  const interval = 60 / parseInt(bpmSlider.value);
                   while (nextTime < ctx.currentTime + 0.1) {
                       beat++;
                       const isStrong = (beat % 2 === 1);
-                      
                       playBeat(nextTime, isStrong);
 
-                      // Вибрация на СЛАБУЮ долю (нечетные - сильные, четные - слабые)
-                      if (!isStrong) {
-                          const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
-                          setTimeout(() => {
-                              if (navigator.vibrate) navigator.vibrate(40);
-                          }, delay);
+                      if (!isStrong) { // Вибро на слабую долю
+                          const delay = (nextTime - ctx.currentTime) * 1000;
+                          setTimeout(() => { if(navigator.vibrate) navigator.vibrate(30); }, Math.max(0, delay));
                       }
-
                       nextTime += interval;
                   }
-                  requestAnimationFrame(scheduler);
+                  setTimeout(scheduler, 25);
               }
 
               function start() {
@@ -189,10 +164,7 @@ jobs:
 
               function stop() {
                   isRunning = false;
-                  if (ctx) {
-                      ctx.close();
-                      ctx = null;
-                  }
+                  if (ctx) ctx.close();
               }
 
               document.getElementById("start").onclick = start;
@@ -206,10 +178,11 @@ jobs:
       - name: Build Android APK
         run: |
           cd metronome
-          cordova build android --release
+          # Принудительная сборка debug версии, так как она не требует подписи для генерации файла
+          cordova build android --debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Metronome-APK
-          path: metronome/platforms/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          path: metronome/platforms/android/app/build/outputs/apk/debug/app-debug.apk
