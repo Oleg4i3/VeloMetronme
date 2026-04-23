@@ -29,11 +29,12 @@ jobs:
           cordova create metronome com.example.metronome Metronome
           cd metronome
           
+          # Используем стабильные плагины для фоновой работы и вибрации
           cordova plugin add cordova-plugin-vibration
           cordova plugin add cordova-plugin-background-mode
-          cordova plugin add cordova-plugin-volume-buttons
           
-          sed -i 's/<service android:name="de.appplant.cordova.plugin.background.ForegroundService" />/<service android:name="de.appplant.cordova.plugin.background.ForegroundService" android:foregroundServiceType="mediaPlayback" \/>/g' plugins/cordova-plugin-background-mode/plugin.xml || true
+          # Заменяем несуществующий плагин на нативную поддержку аппаратных кнопок через конфигурацию
+          # В Cordova кнопки громкости перехватываются стандартными событиями window.addEventListener
           
           cat << 'EOF' > config.xml
           <?xml version='1.0' encoding='utf-8'?>
@@ -47,6 +48,7 @@ jobs:
                       <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
                       <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
                       <uses-permission android:name="android.permission.WAKE_LOCK" />
+                      <uses-permission android:name="android.permission.VIBRATE" />
                   </config-file>
               </platform>
           </widget>
@@ -62,23 +64,22 @@ jobs:
           <head>
           <meta charset="utf-8">
           <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: gap: https://ssl.gstatic.com 'unsafe-eval' 'unsafe-inline'; media-src *; img-src 'self' data: content:;">
-          <meta name="format-detection" content="telephone=no">
-          <meta name="msapplication-tap-highlight" content="no">
           <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
-          <title>Bike Cadence Metronome</title>
+          <title>Metronome</title>
           <style>
-          body { font-family: sans-serif; padding: 20px; background:#111; color:#eee; }
-          button, input { font-size: 18px; margin: 12px 0; }
-          input[type=range]{ width: 100%; }
+          body { font-family: sans-serif; padding: 20px; background:#111; color:#eee; text-align: center; }
+          button { font-size: 24px; margin: 10px; padding: 10px 20px; width: 80%; }
+          input[type=range]{ width: 100%; height: 40px; }
+          #bpmVal { font-weight: bold; font-size: 2em; color: #0f0; }
           </style>
           </head>
           <body>
-          <h2>Cadence metronome</h2>
-          <label>BPM: <span id="bpmVal">90</span></label><br>
+          <h2>Metronome</h2>
+          <div>BPM: <span id="bpmVal">90</span></div>
           <input id="bpm" type="range" min="40" max="200" value="90">
           <br>
-          <button id="start">Start</button>
-          <button id="stop">Stop</button>
+          <button id="start">START</button>
+          <button id="stop">STOP</button>
           
           <script src="cordova.js"></script>
           <script>
@@ -87,31 +88,34 @@ jobs:
               let isRunning = false;
               let beat = 0;
               let nextTime = 0;
-              let lastVolTime = 0;
+              let lastClickTime = 0;
 
-              if (window.cordova && cordova.plugins && cordova.plugins.backgroundMode) {
+              // Настройка фонового режима
+              if (window.cordova && cordova.plugins.backgroundMode) {
+                  cordova.plugins.backgroundMode.enable();
+                  cordova.plugins.backgroundMode.overrideBackButton();
                   cordova.plugins.backgroundMode.setDefaults({
                       title: 'Metronome',
-                      text: 'Running',
+                      text: 'Active in background',
+                      icon: 'icon',
+                      color: 'F1F1F1',
+                      resume: true,
                       hidden: false,
-                      silent: false
-                  });
-                  cordova.plugins.backgroundMode.enable();
-                  cordova.plugins.backgroundMode.on('activate', function() {
-                      cordova.plugins.backgroundMode.disableWebViewOptimizations();
+                      bigText: true
                   });
               }
 
-              function handleVolumeButton() {
+              // Перехват кнопок громкости
+              function onVolumeButton() {
                   const now = Date.now();
-                  if (now - lastVolTime < 500) {
+                  if (now - lastClickTime < 500) {
                       if (isRunning) stop(); else start();
                   }
-                  lastVolTime = now;
+                  lastClickTime = now;
               }
 
-              window.addEventListener("volumeupbutton", handleVolumeButton, false);
-              window.addEventListener("volumedownbutton", handleVolumeButton, false);
+              document.addEventListener("volumeupbutton", onVolumeButton, false);
+              document.addEventListener("volumedownbutton", onVolumeButton, false);
 
               const bpmSlider = document.getElementById("bpm");
               const bpmVal = document.getElementById("bpmVal");
@@ -130,29 +134,21 @@ jobs:
                   return buffer;
               }
 
-              function playBeat(time, strong=false) {
+              function playBeat(time, isStrong) {
                   const source = ctx.createBufferSource();
-                  source.buffer = noiseBuffer(ctx, strong ? 0.09 : 0.05);
+                  source.buffer = noiseBuffer(ctx, isStrong ? 0.09 : 0.05);
 
                   const filter = ctx.createBiquadFilter();
                   filter.type = "bandpass";
-                  filter.frequency.value = strong ? 2200 : 1400;
+                  filter.frequency.value = isStrong ? 2200 : 1400;
                   filter.Q.value = 6;
 
                   const gain = ctx.createGain();
-                  gain.gain.value = strong ? 1.5 : 0.8;
-
-                  const comp = ctx.createDynamicsCompressor();
-                  comp.threshold.value = -18;
-                  comp.knee.value = 20;
-                  comp.ratio.value = 6;
-                  comp.attack.value = 0.003;
-                  comp.release.value = 0.15;
+                  gain.gain.value = isStrong ? 1.5 : 0.8;
 
                   source.connect(filter);
                   filter.connect(gain);
-                  gain.connect(comp);
-                  comp.connect(ctx.destination);
+                  gain.connect(ctx.destination);
 
                   source.start(time);
               }
@@ -165,11 +161,12 @@ jobs:
 
                   while (nextTime < ctx.currentTime + 0.1) {
                       beat++;
-                      const strong = (beat % 2 === 1);
+                      const isStrong = (beat % 2 === 1);
+                      
+                      playBeat(nextTime, isStrong);
 
-                      playBeat(nextTime, strong);
-
-                      if (!strong) {
+                      // Вибрация на СЛАБУЮ долю (нечетные - сильные, четные - слабые)
+                      if (!isStrong) {
                           const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
                           setTimeout(() => {
                               if (navigator.vibrate) navigator.vibrate(40);
@@ -178,7 +175,6 @@ jobs:
 
                       nextTime += interval;
                   }
-
                   requestAnimationFrame(scheduler);
               }
 
@@ -193,7 +189,10 @@ jobs:
 
               function stop() {
                   isRunning = false;
-                  if (ctx) ctx.close();
+                  if (ctx) {
+                      ctx.close();
+                      ctx = null;
+                  }
               }
 
               document.getElementById("start").onclick = start;
@@ -207,10 +206,10 @@ jobs:
       - name: Build Android APK
         run: |
           cd metronome
-          cordova build android
+          cordova build android --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Metronome-APK
-          path: metronome/platforms/android/app/build/outputs/apk/debug/app-debug.apk
+          path: metronome/platforms/android/app/build/outputs/apk/release/app-release-unsigned.apk
