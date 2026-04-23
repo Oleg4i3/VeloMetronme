@@ -1,4 +1,4 @@
-name: Build VeloMetronome APK
+name: Build VeloMetronome Native APK
 
 on:
   push:
@@ -10,269 +10,305 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Cordova and ImageMagick
-        run: |
-          npm install -g cordova
-          sudo apt-get update
-          sudo apt-get install -y imagemagick
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
-      - name: Create Cordova Project
+      - name: Generate project structure
         run: |
-          cordova create metronome com.velo.metronome VeloMetronome
-          cd metronome
-          cordova platform add android
-          cordova plugin add cordova-plugin-vibration
-          cordova plugin add cordova-plugin-background-mode
+          mkdir -p app/src/main/java/com/velo/metronome
+          mkdir -p app/src/main/res/values
+          mkdir -p gradle/wrapper
 
-      - name: Generate App Icon
+      # ---------- Gradle wrapper ----------
+      - name: Write gradle-wrapper.properties
         run: |
-          mkdir -p metronome/res/icon/android
-          convert -size 512x512 xc:'#1a1a2e' \
-            -fill '#e94560' -draw "circle 256,200 256,100" \
-            -fill '#0f3460' -draw "circle 256,350 256,280" \
-            -fill '#16213e' -draw "rectangle 240,100 272,400" \
-            -fill '#e94560' -draw "polygon 200,350 256,280 312,350" \
-            -fill white -font Helvetica-Bold -pointsize 120 -gravity center -annotate +0-30 "VM" \
-            metronome/res/icon/android/icon.png
-          cp metronome/res/icon/android/icon.png metronome/www/icon.png
-
-      - name: Configure config.xml
-        run: |
-          cat << 'EOF' > metronome/config.xml
-          <?xml version='1.0' encoding='utf-8'?>
-          <widget id="com.velo.metronome" version="1.0.0" xmlns="http://www.w3.org/ns/widgets">
-              <name>VeloMetronome</name>
-              <description>Bicycle Cadence Metronome</description>
-              <author email="dev@example.com">Developer</author>
-              <content src="index.html" />
-              <access origin="*" />
-              <allow-intent href="http://*/*" />
-              <allow-intent href="https://*/*" />
-              <preference name="Orientation" value="portrait" />
-              <preference name="KeepRunning" value="true" />
-              <icon src="www/icon.png" />
-          </widget>
+          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
           EOF
 
-      - name: Write Application Source
+      - name: Download gradlew and wrapper jar
         run: |
-          cat << 'EOF' > metronome/www/index.html
-          <!doctype html>
-          <html>
-          <head>
-          <meta charset="utf-8">
-          <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: gap: https://ssl.gstatic.com 'unsafe-eval' 'unsafe-inline' blob:; media-src * data:; img-src 'self' data: content:;">
-          <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
-          <title>VeloMetronome</title>
-          <style>
-          * { box-sizing:border-box; }
-          body { font-family:sans-serif; padding:20px; background:#121212; color:#fff; text-align:center; min-height:100vh; margin:0; display:flex; align-items:center; justify-content:center; }
-          .container { width:100%; max-width:400px; }
-          h2 { color:#ff6b6b; margin-bottom:20px; }
-          .bpm-display { font-size:80px; font-weight:bold; color:#ff6b6b; margin:10px 0; }
-          input[type=range] { width:100%; height:40px; margin:15px 0; accent-color:#ff6b6b; }
-          button { width:100%; padding:18px; font-size:22px; margin:8px 0; border:none; border-radius:12px; font-weight:bold; color:white; }
-          #start { background:#2ecc71; }
-          #stop { background:#e74c3c; }
-          .checkbox-container { display:flex; justify-content:space-around; margin:15px 0; padding:12px; background:rgba(255,255,255,0.08); border-radius:12px; }
-          .checkbox-item { display:flex; align-items:center; gap:8px; }
-          input[type=checkbox] { width:20px; height:20px; accent-color:#ff6b6b; }
-          .status { font-size:14px; color:#aaa; margin-top:15px; padding:8px; background:rgba(255,255,255,0.05); border-radius:8px; }
-          </style>
-          </head>
-          <body>
-          <div class="container">
-            <h2>⏱ VeloMetronome</h2>
-            <div class="bpm-display" id="bpmVal">90</div>
-            <div style="color:#aaa;">BPM</div>
-            <input id="bpm" type="range" min="40" max="180" value="90">
-            <div class="checkbox-container">
-              <div class="checkbox-item">
-                <input type="checkbox" id="vibrateWeak" checked>
-                <label>Слабая вибрация</label>
-              </div>
-              <div class="checkbox-item">
-                <input type="checkbox" id="vibrateStrong" checked>
-                <label>Сильная вибрация</label>
-              </div>
-            </div>
-            <button id="start">▶ СТАРТ</button>
-            <button id="stop">■ СТОП</button>
-            <div class="status" id="modeStatus">
-              🔔 Громкость: стандартный режим
-            </div>
-          </div>
+          wget -q https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradlew -O gradlew
+          chmod +x gradlew
+          wget -q https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradle/wrapper/gradle-wrapper.jar -O gradle/wrapper/gradle-wrapper.jar
 
-          <audio id="silentAudio" loop src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
-
-          <script src="cordova.js"></script>
-          <script>
-          document.addEventListener('deviceready', function() {
-            let ctx = null;
-            let isRunning = false;
-            let timer = null;
-            let nextBeatTime = 0;
-            let beatCount = 0;
-
-            const bpmSlider = document.getElementById("bpm");
-            const bpmVal = document.getElementById("bpmVal");
-            const vibWeak = document.getElementById("vibrateWeak");
-            const vibStrong = document.getElementById("vibrateStrong");
-            const modeStatus = document.getElementById("modeStatus");
-            const silentAudio = document.getElementById("silentAudio");
-
-            // Настройка фонового режима
-            if (cordova.plugins && cordova.plugins.backgroundMode) {
-              cordova.plugins.backgroundMode.enable();
-              cordova.plugins.backgroundMode.setDefaults({
-                title: 'Метроном',
-                text: 'Каденс',
-                silent: true,
-                hidden: true
-              });
-
-              // Даём плагину время активироваться, затем синхронизируем состояние
-              setTimeout(function() {
-                if (document.hidden) {
-                  cordova.plugins.backgroundMode.overrideVolumeButtons(true);
-                  modeStatus.textContent = '🎧 Экран выкл: громкость → СТАРТ/СТОП';
-                } else {
-                  cordova.plugins.backgroundMode.overrideVolumeButtons(false);
-                  modeStatus.textContent = '🔔 Громкость: стандартный режим';
-                }
-              }, 500);
-            }
-
-            bpmSlider.oninput = function() {
-              bpmVal.textContent = bpmSlider.value;
-            };
-
-            // События громкости (работают только когда перехват активен)
-            document.addEventListener('volumeupbutton', function() {
-              toggle();
-            }, false);
-            document.addEventListener('volumedownbutton', function() {
-              toggle();
-            }, false);
-
-            // Управление перехватом при изменении состояния экрана
-            document.addEventListener('pause', function() {
-              if (cordova.plugins.backgroundMode) {
-                cordova.plugins.backgroundMode.overrideVolumeButtons(true);
-              }
-              modeStatus.textContent = '🎧 Экран выкл: громкость → СТАРТ/СТОП';
-            }, false);
-
-            document.addEventListener('resume', function() {
-              if (cordova.plugins.backgroundMode) {
-                cordova.plugins.backgroundMode.overrideVolumeButtons(false);
-              }
-              modeStatus.textContent = '🔔 Громкость: стандартный режим';
-              if (ctx && ctx.state === 'suspended') ctx.resume();
-            }, false);
-
-            // Генерация щелчка
-            function noiseBuffer(audioCtx, dur) {
-              var len = audioCtx.sampleRate * dur;
-              var buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
-              var data = buf.getChannelData(0);
-              for (var i = 0; i < len; i++) {
-                data[i] = (Math.random() * 2 - 1) * 0.6;
-              }
-              return buf;
-            }
-
-            function playClick(time, strong) {
-              var src = ctx.createBufferSource();
-              src.buffer = noiseBuffer(ctx, strong ? 0.08 : 0.06);
-              var filter = ctx.createBiquadFilter();
-              filter.type = 'bandpass';
-              filter.frequency.value = strong ? 2000 : 1000;
-              var gain = ctx.createGain();
-              gain.gain.value = strong ? 1.4 : 0.7;
-              src.connect(filter);
-              filter.connect(gain);
-              gain.connect(ctx.destination);
-              src.start(time);
-
-              // Вибрация
-              var doVib = (strong && vibStrong.checked) || (!strong && vibWeak.checked);
-              if (doVib && navigator.vibrate) {
-                var delayMs = Math.max(0, (time - ctx.currentTime) * 1000);
-                setTimeout(function() {
-                  navigator.vibrate(40);
-                }, delayMs);
-              }
-            }
-
-            function scheduler() {
-              if (!isRunning) return;
-              var bpm = parseInt(bpmSlider.value);
-              var interval = 60 / bpm;
-              while (nextBeatTime < ctx.currentTime + 0.1) {
-                beatCount++;
-                var isStrong = (beatCount % 2 === 1);
-                playClick(nextBeatTime, isStrong);
-                nextBeatTime += interval;
-              }
-            }
-
-            function toggle() {
-              if (isRunning) stop();
-              else start();
-            }
-
-            function start() {
-              if (isRunning) return;
-              if (!ctx) {
-                ctx = new (window.AudioContext || window.webkitAudioContext)();
-              }
-              ctx.resume();
-              silentAudio.play().catch(function(){});
-              isRunning = true;
-              beatCount = 0;
-              nextBeatTime = ctx.currentTime + 0.05;
-              if (timer) clearInterval(timer);
-              timer = setInterval(scheduler, 25);
-              document.getElementById("start").style.opacity = "0.6";
-            }
-
-            function stop() {
-              isRunning = false;
-              if (timer) {
-                clearInterval(timer);
-                timer = null;
-              }
-              silentAudio.pause();
-              document.getElementById("start").style.opacity = "1";
-            }
-
-            document.getElementById("start").onclick = start;
-            document.getElementById("stop").onclick = stop;
-          }, false);
-          </script>
-          </body>
-          </html>
+      - name: Write settings.gradle
+        run: |
+          cat > settings.gradle << 'EOF'
+          rootProject.name = "VeloMetronome"
+          include ':app'
           EOF
 
-      - name: Build Android APK
+      - name: Write root build.gradle
         run: |
-          cd metronome
-          cordova build android --debug
+          cat > build.gradle << 'EOF'
+          plugins {
+              id 'com.android.application' version '8.2.0' apply false
+          }
+          EOF
+
+      - name: Write app/build.gradle
+        run: |
+          cat > app/build.gradle << 'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.velo.metronome'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.velo.metronome"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              buildTypes {
+                  debug { debuggable true }
+              }
+          }
+          EOF
+
+      # ---------- Android Manifest ----------
+      - name: Write AndroidManifest.xml
+        run: |
+          cat > app/src/main/AndroidManifest.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="VeloMetronome"
+                  android:theme="@style/Theme.AppCompat.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+      # ---------- Ресурсы (хотя бы пустые) ----------
+      - name: Write strings.xml
+        run: |
+          echo '<resources><string name="app_name">VeloMetronome</string></resources>' > app/src/main/res/values/strings.xml
+
+      # ---------- Главный Java-файл ----------
+      - name: Write MainActivity.java
+        run: |
+          cat > app/src/main/java/com/velo/metronome/MainActivity.java << 'JAVAEOF'
+          package com.velo.metronome;
+
+          import android.app.Activity;
+          import android.content.Context;
+          import android.media.AudioAttributes;
+          import android.media.AudioFormat;
+          import android.media.AudioTrack;
+          import android.os.Bundle;
+          import android.os.VibrationEffect;
+          import android.os.Vibrator;
+          import android.view.KeyEvent;
+          import android.view.View;
+          import android.view.WindowManager;
+          import android.widget.*;
+
+          public class MainActivity extends Activity {
+              private Vibrator vibrator;
+              private AudioTrack audioTrack;
+              private Thread metronomeThread;
+              private volatile boolean running = false;
+              private int bpm = 90;
+              private boolean vibrateWeak = true, vibrateStrong = true;
+
+              private TextView tvBpm;
+              private SeekBar seekBar;
+              private CheckBox cbWeak, cbStrong;
+              private Button btnStart, btnStop;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                  vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+
+                  LinearLayout layout = new LinearLayout(this);
+                  layout.setOrientation(LinearLayout.VERTICAL);
+                  layout.setPadding(40, 40, 40, 40);
+                  layout.setBackgroundColor(0xFF121212);
+
+                  TextView title = new TextView(this);
+                  title.setText("⏱ VeloMetronome");
+                  title.setTextColor(0xFFFF6B6B);
+                  title.setTextSize(24);
+                  layout.addView(title);
+
+                  tvBpm = new TextView(this);
+                  tvBpm.setText("90");
+                  tvBpm.setTextColor(0xFFFF6B6B);
+                  tvBpm.setTextSize(64);
+                  layout.addView(tvBpm);
+
+                  seekBar = new SeekBar(this);
+                  seekBar.setMax(180);
+                  seekBar.setMin(40);
+                  seekBar.setProgress(bpm);
+                  seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                      public void onProgressChanged(SeekBar sb, int val, boolean fromUser) {
+                          bpm = val;
+                          tvBpm.setText(String.valueOf(val));
+                      }
+                      public void onStartTrackingTouch(SeekBar sb) {}
+                      public void onStopTrackingTouch(SeekBar sb) {}
+                  });
+                  layout.addView(seekBar);
+
+                  LinearLayout checks = new LinearLayout(this);
+                  cbWeak = new CheckBox(this);
+                  cbWeak.setText("Слабая вибрация");
+                  cbWeak.setTextColor(0xFFAAAAAA);
+                  cbWeak.setChecked(true);
+                  cbStrong = new CheckBox(this);
+                  cbStrong.setText("Сильная вибрация");
+                  cbStrong.setTextColor(0xFFAAAAAA);
+                  cbStrong.setChecked(true);
+                  checks.addView(cbWeak);
+                  checks.addView(cbStrong);
+                  layout.addView(checks);
+
+                  btnStart = new Button(this);
+                  btnStart.setText("▶ СТАРТ");
+                  btnStart.setBackgroundColor(0xFF2ECC71);
+                  btnStart.setOnClickListener(v -> startMetronome());
+                  layout.addView(btnStart);
+
+                  btnStop = new Button(this);
+                  btnStop.setText("■ СТОП");
+                  btnStop.setBackgroundColor(0xFFE74C3C);
+                  btnStop.setOnClickListener(v -> stopMetronome());
+                  layout.addView(btnStop);
+
+                  setContentView(layout);
+              }
+
+              @Override
+              public boolean dispatchKeyEvent(KeyEvent event) {
+                  int code = event.getKeyCode();
+                  if ((code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN)
+                          && event.getAction() == KeyEvent.ACTION_DOWN) {
+                      if (running) stopMetronome();
+                      else startMetronome();
+                      return true;
+                  }
+                  return super.dispatchKeyEvent(event);
+              }
+
+              private void startMetronome() {
+                  if (running) return;
+                  running = true;
+                  btnStart.setEnabled(false);
+                  int sampleRate = 44100;
+                  int minBuf = AudioTrack.getMinBufferSize(sampleRate,
+                          AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+                  audioTrack = new AudioTrack.Builder()
+                          .setAudioAttributes(new AudioAttributes.Builder()
+                                  .setUsage(AudioAttributes.USAGE_MEDIA)
+                                  .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                  .build())
+                          .setAudioFormat(new AudioFormat.Builder()
+                                  .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                  .setSampleRate(sampleRate)
+                                  .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                  .build())
+                          .setBufferSizeInBytes(minBuf)
+                          .build();
+                  audioTrack.play();
+
+                  metronomeThread = new Thread(() -> {
+                      int beatCount = 0;
+                      long intervalMs = 60000 / bpm;
+                      while (running) {
+                          boolean strong = (beatCount % 2 == 0);
+                          // короткий шум
+                          byte[] buffer = generateClick(strong, sampleRate);
+                          audioTrack.write(buffer, 0, buffer.length);
+
+                          if (strong && vibrateStrong || !strong && vibrateWeak) {
+                              runOnUiThread(() -> {
+                                  if (vibrator.hasVibrator()) {
+                                      if (android.os.Build.VERSION.SDK_INT >= 26)
+                                          vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE));
+                                      else vibrator.vibrate(50);
+                                  }
+                              });
+                          }
+                          beatCount++;
+                          long remain = intervalMs;
+                          while (remain > 0 && running) {
+                              try { Thread.sleep(Math.min(remain, 20)); }
+                              catch (InterruptedException e) { break; }
+                              remain -= 20;
+                          }
+                      }
+                  });
+                  metronomeThread.start();
+              }
+
+              private void stopMetronome() {
+                  running = false;
+                  if (metronomeThread != null) metronomeThread.interrupt();
+                  if (audioTrack != null) {
+                      audioTrack.stop();
+                      audioTrack.release();
+                      audioTrack = null;
+                  }
+                  btnStart.setEnabled(true);
+              }
+
+              private byte[] generateClick(boolean strong, int sampleRate) {
+                  int durationMs = strong ? 40 : 25;
+                  int samples = sampleRate * durationMs / 1000;
+                  byte[] buf = new byte[samples * 2];
+                  for (int i = 0; i < samples; i++) {
+                      short val = (short)((Math.random() * 0.8 - 0.4) * Short.MAX_VALUE);
+                      buf[i*2] = (byte)(val & 0xff);
+                      buf[i*2+1] = (byte)((val >> 8) & 0xff);
+                  }
+                  return buf;
+              }
+
+              @Override
+              protected void onDestroy() {
+                  stopMetronome();
+                  super.onDestroy();
+              }
+          }
+          JAVAEOF
+
+      # ---------- Сборка ----------
+      - name: Build APK
+        run: |
+          ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: VeloMetronome-APK
-          path: metronome/platforms/android/app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/debug/app-debug.apk
