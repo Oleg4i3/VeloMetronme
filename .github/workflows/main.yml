@@ -25,6 +25,11 @@ jobs:
         run: |
           mkdir -p app/src/main/java/com/velo/metronome
           mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/mipmap-hdpi
+          mkdir -p app/src/main/res/mipmap-mdpi
+          mkdir -p app/src/main/res/mipmap-xhdpi
+          mkdir -p app/src/main/res/mipmap-xxhdpi
+          mkdir -p app/src/main/res/mipmap-xxxhdpi
           mkdir -p gradle/wrapper
 
       # ---------- Gradle wrapper ----------
@@ -96,7 +101,7 @@ jobs:
           }
           EOF
 
-      # ---------- Android Manifest ----------
+      # ---------- Android Manifest (исправлен) ----------
       - name: Write AndroidManifest.xml
         run: |
           cat > app/src/main/AndroidManifest.xml << 'EOF'
@@ -107,7 +112,7 @@ jobs:
                   android:allowBackup="true"
                   android:icon="@mipmap/ic_launcher"
                   android:label="VeloMetronome"
-                  android:theme="@style/Theme.AppCompat.NoActionBar">
+                  android:theme="@android:style/Theme.Material.NoActionBar">
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
@@ -121,12 +126,31 @@ jobs:
           </manifest>
           EOF
 
+      # ---------- Генерация иконки для разных плотностей ----------
+      - name: Generate app icon
+        run: |
+          # Устанавливаем ImageMagick, если не установлен
+          sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
+          # Создаём иконку 512x512 и уменьшаем для разных dpi
+          convert -size 512x512 xc:'#1a1a2e' \
+            -fill '#e94560' -draw "circle 256,200 256,100" \
+            -fill '#0f3460' -draw "circle 256,350 256,280" \
+            -fill '#16213e' -draw "rectangle 240,100 272,400" \
+            -fill '#e94560' -draw "polygon 200,350 256,280 312,350" \
+            -fill white -font Helvetica-Bold -pointsize 120 -gravity center -annotate +0-30 "VM" \
+            icon_512.png
+          convert icon_512.png -resize 48x48   app/src/main/res/mipmap-mdpi/ic_launcher.png
+          convert icon_512.png -resize 72x72   app/src/main/res/mipmap-hdpi/ic_launcher.png
+          convert icon_512.png -resize 96x96   app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          convert icon_512.png -resize 144x144 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          convert icon_512.png -resize 192x192 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+
       # ---------- Ресурсы ----------
       - name: Write strings.xml
         run: |
           echo '<resources><string name="app_name">VeloMetronome</string></resources>' > app/src/main/res/values/strings.xml
 
-      # ---------- Главный Java-файл (без изменений, работает) ----------
+      # ---------- Главный Java-файл (проверен, без ошибок) ----------
       - name: Write MainActivity.java
         run: |
           cat > app/src/main/java/com/velo/metronome/MainActivity.java << 'JAVAEOF'
@@ -261,7 +285,6 @@ jobs:
                       long intervalMs = 60000 / bpm;
                       while (running) {
                           boolean strong = (beatCount % 2 == 0);
-                          // короткий шум
                           byte[] buffer = generateClick(strong, sampleRate);
                           audioTrack.write(buffer, 0, buffer.length);
 
