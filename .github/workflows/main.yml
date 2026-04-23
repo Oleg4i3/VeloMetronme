@@ -1,4 +1,4 @@
-name: Build VeloMetronome APK (Capacitor)
+name: Build VeloMetronome APK
 
 on:
   push:
@@ -19,59 +19,68 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: '17'
 
-      - name: Install Capacitor CLI and ImageMagick
+      - name: Install Cordova and ImageMagick
         run: |
-          npm install -g @capacitor/cli @capacitor/core
+          npm install -g cordova
           sudo apt-get update
           sudo apt-get install -y imagemagick
 
-      - name: Create Capacitor Project
+      - name: Create Cordova Project
         run: |
-          mkdir velometronome && cd velometronome
-          npm init -y
-          npm install @capacitor/core @capacitor/cli
-          npx cap init VeloMetronome com.velo.metronome --web-dir www
-          npm install @capacitor/android
-          npx cap add android
-          
-          npm install @capacitor-community/volume-buttons
-          npm install @capacitor/haptics
+          cordova create metronome com.velo.metronome VeloMetronome
+          cd metronome
+          cordova platform add android
+          cordova plugin add cordova-plugin-vibration
+          cordova plugin add cordova-plugin-background-mode
 
       - name: Generate App Icon
         run: |
-          cd velometronome
-          mkdir -p www
+          mkdir -p metronome/res/icon/android
           convert -size 512x512 xc:'#1a1a2e' \
             -fill '#e94560' -draw "circle 256,200 256,100" \
             -fill '#0f3460' -draw "circle 256,350 256,280" \
             -fill '#16213e' -draw "rectangle 240,100 272,400" \
             -fill '#e94560' -draw "polygon 200,350 256,280 312,350" \
-            -fill 'white' -font Helvetica-Bold -pointsize 120 -gravity center -annotate +0-30 "VM" \
-            -fill '#e94560' -draw "circle 220,200 220,185" \
-            -fill '#e94560' -draw "circle 292,200 292,185" \
-            www/icon.png
+            -fill white -font Helvetica-Bold -pointsize 120 -gravity center -annotate +0-30 "VM" \
+            metronome/res/icon/android/icon.png
+          cp metronome/res/icon/android/icon.png metronome/www/icon.png
 
-      - name: Write Application Web Content
+      - name: Configure config.xml
         run: |
-          cd velometronome
-          cat << 'EOF' > www/index.html
+          cat << 'EOF' > metronome/config.xml
+          <?xml version='1.0' encoding='utf-8'?>
+          <widget id="com.velo.metronome" version="1.0.0" xmlns="http://www.w3.org/ns/widgets">
+              <name>VeloMetronome</name>
+              <description>Bicycle Cadence Metronome</description>
+              <author email="dev@example.com">Developer</author>
+              <content src="index.html" />
+              <access origin="*" />
+              <allow-intent href="http://*/*" />
+              <allow-intent href="https://*/*" />
+              <preference name="Orientation" value="portrait" />
+              <preference name="KeepRunning" value="true" />
+              <icon src="www/icon.png" />
+          </widget>
+          EOF
+
+      - name: Write Application Source
+        run: |
+          cat << 'EOF' > metronome/www/index.html
           <!doctype html>
           <html>
           <head>
           <meta charset="utf-8">
+          <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: gap: https://ssl.gstatic.com 'unsafe-eval' 'unsafe-inline' blob:; media-src * data:; img-src 'self' data: content:;">
           <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
           <title>VeloMetronome</title>
           <style>
-          * { box-sizing: border-box; }
-          body {
-            font-family: sans-serif; padding:20px; background:#121212; color:#fff;
-            text-align:center; min-height:100vh; margin:0; display:flex; align-items:center; justify-content:center;
-          }
+          * { box-sizing:border-box; }
+          body { font-family:sans-serif; padding:20px; background:#121212; color:#fff; text-align:center; min-height:100vh; margin:0; display:flex; align-items:center; justify-content:center; }
           .container { width:100%; max-width:400px; }
           h2 { color:#ff6b6b; margin-bottom:20px; }
-          .bpm-display { font-size:80px; font-weight:bold; color:#ff6b6b; margin:10px 0; text-shadow:0 0 20px rgba(255,107,107,0.5); }
+          .bpm-display { font-size:80px; font-weight:bold; color:#ff6b6b; margin:10px 0; }
           input[type=range] { width:100%; height:40px; margin:15px 0; accent-color:#ff6b6b; }
           button { width:100%; padding:18px; font-size:22px; margin:8px 0; border:none; border-radius:12px; font-weight:bold; color:white; }
           #start { background:#2ecc71; }
@@ -105,99 +114,132 @@ jobs:
             </div>
           </div>
 
-          <script type="module">
-          import { VolumeButtons } from '@capacitor-community/volume-buttons';
-          import { Haptics, ImpactStyle } from '@capacitor/haptics';
+          <audio id="silentAudio" loop src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
 
-          let ctx = null;
-          let isRunning = false;
-          let timer = null;
-          let nextBeatTime = 0;
-          let beatCount = 0;
-          let isScreenOff = false;
+          <script src="cordova.js"></script>
+          <script>
+          document.addEventListener('deviceready', function() {
+            let ctx = null;
+            let isRunning = false;
+            let timer = null;
+            let nextBeatTime = 0;
+            let beatCount = 0;
 
-          document.addEventListener('deviceready', () => {
             const bpmSlider = document.getElementById("bpm");
             const bpmVal = document.getElementById("bpmVal");
             const vibWeak = document.getElementById("vibrateWeak");
             const vibStrong = document.getElementById("vibrateStrong");
             const modeStatus = document.getElementById("modeStatus");
+            const silentAudio = document.getElementById("silentAudio");
 
-            bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
+            // Настройка фонового режима
+            if (cordova.plugins && cordova.plugins.backgroundMode) {
+              cordova.plugins.backgroundMode.enable();
+              cordova.plugins.backgroundMode.setDefaults({
+                title: 'Метроном',
+                text: 'Каденс',
+                silent: true,
+                hidden: true
+              });
 
-            VolumeButtons.addListener('volumeUpButton', () => {
-              if (isScreenOff) toggle();
-            });
-            VolumeButtons.addListener('volumeDownButton', () => {
-              if (isScreenOff) toggle();
-            });
+              // Даём плагину время активироваться, затем синхронизируем состояние
+              setTimeout(function() {
+                if (document.hidden) {
+                  cordova.plugins.backgroundMode.overrideVolumeButtons(true);
+                  modeStatus.textContent = '🎧 Экран выкл: громкость → СТАРТ/СТОП';
+                } else {
+                  cordova.plugins.backgroundMode.overrideVolumeButtons(false);
+                  modeStatus.textContent = '🔔 Громкость: стандартный режим';
+                }
+              }, 500);
+            }
 
-            document.addEventListener('pause', () => {
-              isScreenOff = true;
+            bpmSlider.oninput = function() {
+              bpmVal.textContent = bpmSlider.value;
+            };
+
+            // События громкости (работают только когда перехват активен)
+            document.addEventListener('volumeupbutton', function() {
+              toggle();
+            }, false);
+            document.addEventListener('volumedownbutton', function() {
+              toggle();
+            }, false);
+
+            // Управление перехватом при изменении состояния экрана
+            document.addEventListener('pause', function() {
+              if (cordova.plugins.backgroundMode) {
+                cordova.plugins.backgroundMode.overrideVolumeButtons(true);
+              }
               modeStatus.textContent = '🎧 Экран выкл: громкость → СТАРТ/СТОП';
-            });
-            document.addEventListener('resume', () => {
-              isScreenOff = false;
+            }, false);
+
+            document.addEventListener('resume', function() {
+              if (cordova.plugins.backgroundMode) {
+                cordova.plugins.backgroundMode.overrideVolumeButtons(false);
+              }
               modeStatus.textContent = '🔔 Громкость: стандартный режим';
               if (ctx && ctx.state === 'suspended') ctx.resume();
-            });
+            }, false);
 
-            function noiseBuffer(audioCtx, duration) {
-              const length = audioCtx.sampleRate * duration;
-              const buffer = audioCtx.createBuffer(1, length, audioCtx.sampleRate);
-              const data = buffer.getChannelData(0);
-              for (let i = 0; i < length; i++) {
+            // Генерация щелчка
+            function noiseBuffer(audioCtx, dur) {
+              var len = audioCtx.sampleRate * dur;
+              var buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+              var data = buf.getChannelData(0);
+              for (var i = 0; i < len; i++) {
                 data[i] = (Math.random() * 2 - 1) * 0.6;
               }
-              return buffer;
+              return buf;
             }
 
             function playClick(time, strong) {
-              const source = ctx.createBufferSource();
-              source.buffer = noiseBuffer(ctx, strong ? 0.08 : 0.06);
-              const filter = ctx.createBiquadFilter();
+              var src = ctx.createBufferSource();
+              src.buffer = noiseBuffer(ctx, strong ? 0.08 : 0.06);
+              var filter = ctx.createBiquadFilter();
               filter.type = 'bandpass';
               filter.frequency.value = strong ? 2000 : 1000;
-              const gain = ctx.createGain();
+              var gain = ctx.createGain();
               gain.gain.value = strong ? 1.4 : 0.7;
-              source.connect(filter);
+              src.connect(filter);
               filter.connect(gain);
               gain.connect(ctx.destination);
-              source.start(time);
+              src.start(time);
 
-              const doVib = (strong && vibStrong.checked) || (!strong && vibWeak.checked);
-              if (doVib) {
-                const delayMs = Math.max(0, (time - ctx.currentTime) * 1000);
-                setTimeout(async () => {
-                  try {
-                    await Haptics.impact({ style: ImpactStyle.Medium });
-                  } catch (e) {
-                    if (navigator.vibrate) navigator.vibrate(40);
-                  }
+              // Вибрация
+              var doVib = (strong && vibStrong.checked) || (!strong && vibWeak.checked);
+              if (doVib && navigator.vibrate) {
+                var delayMs = Math.max(0, (time - ctx.currentTime) * 1000);
+                setTimeout(function() {
+                  navigator.vibrate(40);
                 }, delayMs);
               }
             }
 
             function scheduler() {
               if (!isRunning) return;
-              const bpm = parseInt(bpmSlider.value);
-              const interval = 60 / bpm;
+              var bpm = parseInt(bpmSlider.value);
+              var interval = 60 / bpm;
               while (nextBeatTime < ctx.currentTime + 0.1) {
                 beatCount++;
-                const isStrong = (beatCount % 2 === 1);
+                var isStrong = (beatCount % 2 === 1);
                 playClick(nextBeatTime, isStrong);
                 nextBeatTime += interval;
               }
             }
 
             function toggle() {
-              isRunning ? stop() : start();
+              if (isRunning) stop();
+              else start();
             }
 
             function start() {
               if (isRunning) return;
-              if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+              if (!ctx) {
+                ctx = new (window.AudioContext || window.webkitAudioContext)();
+              }
               ctx.resume();
+              silentAudio.play().catch(function(){});
               isRunning = true;
               beatCount = 0;
               nextBeatTime = ctx.currentTime + 0.05;
@@ -208,42 +250,29 @@ jobs:
 
             function stop() {
               isRunning = false;
-              if (timer) { clearInterval(timer); timer = null; }
+              if (timer) {
+                clearInterval(timer);
+                timer = null;
+              }
+              silentAudio.pause();
               document.getElementById("start").style.opacity = "1";
             }
 
             document.getElementById("start").onclick = start;
             document.getElementById("stop").onclick = stop;
-          });
+          }, false);
           </script>
           </body>
           </html>
           EOF
 
-      - name: Fix duplicate Kotlin dependencies
-        run: |
-          cd velometronome/android/app
-          # Исключаем устаревшие модули Kotlin, которые конфликтуют с kotlin-stdlib
-          sed -i '/apply plugin: .com.android.application./a\
-          configurations {\
-              all {\
-                  exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk7"\
-                  exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk8"\
-              }\
-          }' build.gradle
-
-      - name: Sync Capacitor Android Project
-        run: |
-          cd velometronome
-          npx cap sync android
-
       - name: Build Android APK
         run: |
-          cd velometronome/android
-          ./gradlew assembleDebug
+          cd metronome
+          cordova build android --debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: VeloMetronome-APK
-          path: velometronome/android/app/build/outputs/apk/debug/app-debug.apk
+          path: metronome/platforms/android/app/build/outputs/apk/debug/app-debug.apk
