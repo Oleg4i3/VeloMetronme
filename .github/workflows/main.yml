@@ -29,15 +29,13 @@ jobs:
           cordova create metronome com.velo.metronome VeloMetronome
           cd metronome
           cordova platform add android
-          
-          # Устанавливаем только нужные плагины
           cordova plugin add cordova-plugin-vibration
           cordova plugin add cordova-plugin-background-mode
 
-      - name: Get App Icon
+      - name: Setup Icon
         run: |
-          # Никаких генераций! Просто качаем 100% валидный PNG по ссылке
           mkdir -p metronome/res/icon/android
+          # Качаем стандартную иконку, чтобы компилятор Android (AAPT2) не выдавал ошибок
           curl -L -o metronome/www/icon.png https://raw.githubusercontent.com/apache/cordova-app-hello-world/master/template_src/www/img/logo.png
           cp metronome/www/icon.png metronome/res/icon/android/icon.png
 
@@ -48,7 +46,6 @@ jobs:
           <widget id="com.velo.metronome" version="1.0.0" xmlns="http://www.w3.org/ns/widgets">
               <name>VeloMetronome</name>
               <description>Bicycle Cadence Metronome</description>
-              <author email="dev@example.com">Developer</author>
               <content src="index.html" />
               <access origin="*" />
               <allow-intent href="http://*/*" />
@@ -66,31 +63,32 @@ jobs:
           <html>
           <head>
           <meta charset="utf-8">
-          <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: gap: https://ssl.gstatic.com 'unsafe-eval' 'unsafe-inline' blob:; media-src * data:; img-src 'self' data: content:;">
           <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
           <title>VeloMetronome</title>
           <style>
           body { font-family: sans-serif; padding: 30px; background:#000; color:#fff; text-align:center; }
-          button { width: 100%; padding: 20px; font-size: 24px; margin: 10px 0; background: #333; color: white; border: 1px solid #555; }
-          #start { background: #1a4d1a; }
-          #stop { background: #4d1a1a; }
-          input[type=range] { width: 100%; height: 50px; }
-          h2 { color: #f14f4d; }
-          .status { font-size: 14px; color: #888; margin-top: 20px; }
+          button { width: 100%; padding: 25px; font-size: 24px; margin: 15px 0; border: none; border-radius: 10px; color: white; font-weight: bold; }
+          #start { background: #28a745; }
+          #stop { background: #dc3545; }
+          input[type=range] { width: 100%; height: 60px; margin: 20px 0; }
+          h2 { color: #f14f4d; margin-bottom: 0; }
+          .bpm-display { font-size: 72px; font-weight: bold; margin: 10px 0; color: #f14f4d; }
+          .hint { font-size: 14px; color: #666; margin-top: 20px; }
           </style>
           </head>
           <body>
           <h2>VeloMetronome</h2>
-          <div style="font-size: 48px;" id="bpmVal">90</div>
+          <div class="bpm-display" id="bpmVal">90</div>
           <input id="bpm" type="range" min="40" max="180" value="90">
           <button id="start">START</button>
           <button id="stop">STOP</button>
-          <div class="status">Кнопки громкости: Toggle (экран выкл)</div>
+          <div class="hint">В кармане: кнопка громкости = Вкл/Выкл</div>
           
           <audio id="silentAudio" loop src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
 
           <script src="cordova.js"></script>
           <script>
+          // Высокоточный таймер в отдельном потоке
           const workerCode = `
               let timer = null;
               self.onmessage = function(e) {
@@ -98,76 +96,60 @@ jobs:
                   else if (e.data === 'stop') clearInterval(timer);
               };
           `;
-          const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
-          const timerWorker = new Worker(URL.createObjectURL(workerBlob));
+          const timerWorker = new Worker(URL.createObjectURL(new Blob([workerCode])));
 
-          document.addEventListener('deviceready', function() {
-              let ctx, isRunning = false, beat = 0, nextTime = 0, lastVolTime = 0;
-              let isPaused = false; 
+          document.addEventListener('deviceready', () => {
+              let ctx, isRunning = false, beat = 0, nextTime = 0;
+              let isScreenOff = false;
 
               const bpmSlider = document.getElementById("bpm");
               const bpmVal = document.getElementById("bpmVal");
               const silentAudio = document.getElementById("silentAudio");
 
-              if (cordova.plugins.backgroundMode) {
-                  cordova.plugins.backgroundMode.enable();
-                  cordova.plugins.backgroundMode.setDefaults({ silent: true });
-              }
+              // Включаем фоновый режим
+              cordova.plugins.backgroundMode.enable();
+              cordova.plugins.backgroundMode.setDefaults({ silent: true });
 
-              document.addEventListener('pause', () => { isPaused = true; }, false);
-              document.addEventListener('resume', () => { 
-                  isPaused = false; 
-                  if (ctx && ctx.state === 'suspended') ctx.resume();
-              }, false);
+              document.addEventListener('pause', () => { isScreenOff = true; }, false);
+              document.addEventListener('resume', () => { isScreenOff = false; }, false);
 
-              function handleVolume(e) {
-                  if (!isPaused) return; 
-                  
-                  const now = Date.now();
-                  if (now - lastVolTime < 600) {
-                      toggle();
-                      lastVolTime = 0;
-                  } else {
-                      lastVolTime = now;
+              // УПРАВЛЕНИЕ ГРОМКОСТЬЮ ПРИ ВЫКЛЮЧЕННОМ ЭКРАНЕ
+              const handleVolume = () => {
+                  if (isScreenOff) { 
+                      toggle(); 
                   }
-              }
-              
+              };
               document.addEventListener('volumeupbutton', handleVolume, false);
               document.addEventListener('volumedownbutton', handleVolume, false);
 
               bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
 
-              function noiseBuffer(ctx, dur=0.06) {
-                  const b = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
-                  const d = b.getChannelData(0);
-                  for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2 - 1) * 0.7;
-                  return b;
-              }
-
-              function playBeat(time, strong) {
-                  const s = ctx.createBufferSource();
-                  s.buffer = noiseBuffer(ctx, strong ? 0.08 : 0.05);
-                  const f = ctx.createBiquadFilter();
-                  f.type = "bandpass";
-                  f.frequency.value = strong ? 2200 : 1200;
+              function playSound(time, freq, vol) {
+                  const osc = ctx.createOscillator();
                   const g = ctx.createGain();
-                  g.gain.value = strong ? 1.5 : 0.7;
-                  s.connect(f); f.connect(g); g.connect(ctx.destination);
-                  s.start(time);
+                  osc.type = 'square';
+                  osc.frequency.value = freq;
+                  g.gain.setValueAtTime(vol, time);
+                  g.gain.exponentialRampToValueAtTime(0.001, time + 0.1);
+                  osc.connect(g); g.connect(ctx.destination);
+                  osc.start(time); osc.stop(time + 0.1);
               }
 
-              timerWorker.onmessage = function() {
+              timerWorker.onmessage = () => {
                   if (!isRunning) return;
                   const interval = 60 / parseInt(bpmSlider.value);
                   while (nextTime < ctx.currentTime + 0.1) {
                       beat++;
-                      const isStrong = (beat % 2 === 1);
-                      playBeat(nextTime, isStrong);
+                      const isStrong = (beat % 2 !== 0);
                       
+                      // Звук: сильная доля выше, слабая ниже
+                      playSound(nextTime, isStrong ? 1200 : 800, isStrong ? 0.5 : 0.3);
+
+                      // 1) ВИБРО НА ВТОРУЮ (СЛАБУЮ) ДОЛЮ
                       if (!isStrong) {
                           const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
-                          setTimeout(() => { 
-                              if(navigator.vibrate) navigator.vibrate(50); 
+                          setTimeout(() => {
+                              if (navigator.vibrate) navigator.vibrate(60);
                           }, delay);
                       }
                       nextTime += interval;
@@ -180,17 +162,17 @@ jobs:
                   if (isRunning) return;
                   if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
                   ctx.resume();
-                  silentAudio.play().catch(()=>{});
+                  silentAudio.play().catch(() => {});
                   isRunning = true; beat = 0; nextTime = ctx.currentTime + 0.05;
                   timerWorker.postMessage('start');
-                  document.getElementById("start").style.border = "4px solid white";
+                  document.getElementById("start").style.boxShadow = "0 0 20px white";
               }
 
               function stop() {
                   isRunning = false;
                   timerWorker.postMessage('stop');
                   silentAudio.pause();
-                  document.getElementById("start").style.border = "1px solid #555";
+                  document.getElementById("start").style.boxShadow = "none";
               }
 
               document.getElementById("start").onclick = start;
