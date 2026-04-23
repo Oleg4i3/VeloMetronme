@@ -1,4 +1,4 @@
-name: Build VeloMetronome APK
+name: Build VeloMetronome APK (Capacitor)
 
 on:
   push:
@@ -21,26 +21,29 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Cordova and ImageMagick
+      - name: Install Capacitor CLI and ImageMagick
         run: |
-          npm install -g cordova
+          npm install -g @capacitor/cli @capacitor/core
           sudo apt-get update
           sudo apt-get install -y imagemagick
 
-      - name: Create Cordova Project
+      - name: Create Capacitor Project
         run: |
-          cordova create metronome com.velo.metronome VeloMetronome
-          cd metronome
-          cordova platform add android
+          mkdir velometronome && cd velometronome
+          npm init -y
+          npm install @capacitor/core @capacitor/cli
+          npx cap init VeloMetronome com.velo.metronome --web-dir www
+          npm install @capacitor/android
+          npx cap add android
           
-          # Только реально существующие плагины
-          cordova plugin add cordova-plugin-vibration
-          cordova plugin add cordova-plugin-background-mode
+          # Устанавливаем нужные плагины
+          npm install @capacitor-community/volume-buttons
+          npm install @capacitor/haptics
 
       - name: Generate App Icon
         run: |
-          mkdir -p metronome/res/icon/android
-          
+          cd velometronome
+          mkdir -p www
           convert -size 512x512 xc:'#1a1a2e' \
             -fill '#e94560' -draw "circle 256,200 256,100" \
             -fill '#0f3460' -draw "circle 256,350 256,280" \
@@ -49,115 +52,35 @@ jobs:
             -fill 'white' -font Helvetica-Bold -pointsize 120 -gravity center -annotate +0-30 "VM" \
             -fill '#e94560' -draw "circle 220,200 220,185" \
             -fill '#e94560' -draw "circle 292,200 292,185" \
-            metronome/res/icon/android/icon.png
-          
-          cp metronome/res/icon/android/icon.png metronome/www/icon.png
+            www/icon.png
 
-      - name: Configure config.xml
+      - name: Write Application Web Content
         run: |
-          cat << 'EOF' > metronome/config.xml
-          <?xml version='1.0' encoding='utf-8'?>
-          <widget id="com.velo.metronome" version="1.0.0" xmlns="http://www.w3.org/ns/widgets">
-              <name>VeloMetronome</name>
-              <description>Bicycle Cadence Metronome</description>
-              <author email="dev@example.com">Developer</author>
-              <content src="index.html" />
-              <access origin="*" />
-              <allow-intent href="http://*/*" />
-              <allow-intent href="https://*/*" />
-              <preference name="Orientation" value="portrait" />
-              <preference name="KeepRunning" value="true" />
-              <icon src="www/icon.png" />
-          </widget>
-          EOF
-
-      - name: Write Application Source
-        run: |
-          cat << 'EOF' > metronome/www/index.html
+          cd velometronome
+          cat << 'EOF' > www/index.html
           <!doctype html>
           <html>
           <head>
           <meta charset="utf-8">
-          <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: gap: https://ssl.gstatic.com 'unsafe-eval' 'unsafe-inline' blob:; media-src * data:; img-src 'self' data: content:;">
           <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
           <title>VeloMetronome</title>
           <style>
           * { box-sizing: border-box; }
           body {
-            font-family: sans-serif;
-            padding: 20px;
-            background: #121212;
-            color: #fff;
-            text-align: center;
-            min-height: 100vh;
-            margin: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            font-family: sans-serif; padding:20px; background:#121212; color:#fff;
+            text-align:center; min-height:100vh; margin:0; display:flex; align-items:center; justify-content:center;
           }
-          .container {
-            width: 100%;
-            max-width: 400px;
-          }
-          h2 {
-            color: #ff6b6b;
-            margin-bottom: 20px;
-          }
-          .bpm-display {
-            font-size: 80px;
-            font-weight: bold;
-            color: #ff6b6b;
-            margin: 10px 0;
-            text-shadow: 0 0 20px rgba(255,107,107,0.5);
-          }
-          input[type=range] {
-            width: 100%;
-            height: 40px;
-            margin: 15px 0;
-            accent-color: #ff6b6b;
-          }
-          button {
-            width: 100%;
-            padding: 18px;
-            font-size: 22px;
-            margin: 8px 0;
-            border: none;
-            border-radius: 12px;
-            font-weight: bold;
-            color: white;
-          }
-          #start {
-            background: #2ecc71;
-          }
-          #stop {
-            background: #e74c3c;
-          }
-          .checkbox-container {
-            display: flex;
-            justify-content: space-around;
-            margin: 15px 0;
-            padding: 12px;
-            background: rgba(255,255,255,0.08);
-            border-radius: 12px;
-          }
-          .checkbox-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-          }
-          input[type=checkbox] {
-            width: 20px;
-            height: 20px;
-            accent-color: #ff6b6b;
-          }
-          .status {
-            font-size: 14px;
-            color: #aaa;
-            margin-top: 15px;
-            padding: 8px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 8px;
-          }
+          .container { width:100%; max-width:400px; }
+          h2 { color:#ff6b6b; margin-bottom:20px; }
+          .bpm-display { font-size:80px; font-weight:bold; color:#ff6b6b; margin:10px 0; text-shadow:0 0 20px rgba(255,107,107,0.5); }
+          input[type=range] { width:100%; height:40px; margin:15px 0; accent-color:#ff6b6b; }
+          button { width:100%; padding:18px; font-size:22px; margin:8px 0; border:none; border-radius:12px; font-weight:bold; color:white; }
+          #start { background:#2ecc71; }
+          #stop { background:#e74c3c; }
+          .checkbox-container { display:flex; justify-content:space-around; margin:15px 0; padding:12px; background:rgba(255,255,255,0.08); border-radius:12px; }
+          .checkbox-item { display:flex; align-items:center; gap:8px; }
+          input[type=checkbox] { width:20px; height:20px; accent-color:#ff6b6b; }
+          .status { font-size:14px; color:#aaa; margin-top:15px; padding:8px; background:rgba(255,255,255,0.05); border-radius:8px; }
           </style>
           </head>
           <body>
@@ -166,7 +89,6 @@ jobs:
             <div class="bpm-display" id="bpmVal">90</div>
             <div style="color:#aaa;">BPM</div>
             <input id="bpm" type="range" min="40" max="180" value="90">
-            
             <div class="checkbox-container">
               <div class="checkbox-item">
                 <input type="checkbox" id="vibrateWeak" checked>
@@ -177,7 +99,6 @@ jobs:
                 <label>Сильная вибрация</label>
               </div>
             </div>
-            
             <button id="start">▶ СТАРТ</button>
             <button id="stop">■ СТОП</button>
             <div class="status" id="modeStatus">
@@ -185,64 +106,44 @@ jobs:
             </div>
           </div>
 
-          <script src="cordova.js"></script>
-          <script>
-          document.addEventListener('deviceready', function() {
-            let ctx = null;
-            let isRunning = false;
-            let timer = null;
-            let nextBeatTime = 0;
-            let beatCount = 0;
+          <script type="module">
+          import { VolumeButtons } from '@capacitor-community/volume-buttons';
+          import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
+          let ctx = null;
+          let isRunning = false;
+          let timer = null;
+          let nextBeatTime = 0;
+          let beatCount = 0;
+          let isScreenOff = false;
+
+          // Ожидаем deviceready (Capacitor)
+          document.addEventListener('deviceready', () => {
             const bpmSlider = document.getElementById("bpm");
             const bpmVal = document.getElementById("bpmVal");
             const vibWeak = document.getElementById("vibrateWeak");
             const vibStrong = document.getElementById("vibrateStrong");
             const modeStatus = document.getElementById("modeStatus");
 
-            // Фоновый режим + настройка кнопок громкости
-            if (cordova.plugins.backgroundMode) {
-              cordova.plugins.backgroundMode.enable();
-              cordova.plugins.backgroundMode.setDefaults({
-                title: 'Метроном',
-                text: 'Каденс',
-                silent: true,
-                hidden: true
-              });
+            bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
 
-              // Даём плагину активироваться, затем ставим режим громкости по умолчанию
-              setTimeout(function() {
-                cordova.plugins.backgroundMode.overrideVolumeButtons(false);
-              }, 500);
-            }
+            // Кнопки громкости
+            VolumeButtons.addListener('volumeUpButton', () => {
+              if (isScreenOff) toggle();
+            });
+            VolumeButtons.addListener('volumeDownButton', () => {
+              if (isScreenOff) toggle();
+            });
 
-            bpmSlider.oninput = () => {
-              bpmVal.textContent = bpmSlider.value;
-            };
-
-            // События громкости: будут срабатывать только когда перехват включен
-            document.addEventListener('volumeupbutton', function() {
-              toggle();
-            }, false);
-            document.addEventListener('volumedownbutton', function() {
-              toggle();
-            }, false);
-
-            // Управление перехватом в зависимости от состояния экрана
-            document.addEventListener('pause', function() {
-              if (cordova.plugins.backgroundMode) {
-                cordova.plugins.backgroundMode.overrideVolumeButtons(true);
-              }
+            document.addEventListener('pause', () => {
+              isScreenOff = true;
               modeStatus.textContent = '🎧 Экран выкл: громкость → СТАРТ/СТОП';
-            }, false);
-
-            document.addEventListener('resume', function() {
-              if (cordova.plugins.backgroundMode) {
-                cordova.plugins.backgroundMode.overrideVolumeButtons(false);
-              }
+            });
+            document.addEventListener('resume', () => {
+              isScreenOff = false;
               modeStatus.textContent = '🔔 Громкость: стандартный режим';
               if (ctx && ctx.state === 'suspended') ctx.resume();
-            }, false);
+            });
 
             function noiseBuffer(audioCtx, duration) {
               const length = audioCtx.sampleRate * duration;
@@ -267,11 +168,17 @@ jobs:
               gain.connect(ctx.destination);
               source.start(time);
 
+              // Вибрация
               const doVib = (strong && vibStrong.checked) || (!strong && vibWeak.checked);
-              if (doVib && navigator.vibrate) {
+              if (doVib) {
                 const delayMs = Math.max(0, (time - ctx.currentTime) * 1000);
-                setTimeout(function() {
-                  navigator.vibrate(40);
+                setTimeout(async () => {
+                  try {
+                    await Haptics.impact({ style: ImpactStyle.Medium });
+                  } catch (e) {
+                    // Fallback на обычную вибрацию
+                    if (navigator.vibrate) navigator.vibrate(40);
+                  }
                 }, delayMs);
               }
             }
@@ -289,18 +196,12 @@ jobs:
             }
 
             function toggle() {
-              if (isRunning) {
-                stop();
-              } else {
-                start();
-              }
+              isRunning ? stop() : start();
             }
 
             function start() {
               if (isRunning) return;
-              if (!ctx) {
-                ctx = new (window.AudioContext || window.webkitAudioContext)();
-              }
+              if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
               ctx.resume();
               isRunning = true;
               beatCount = 0;
@@ -312,28 +213,30 @@ jobs:
 
             function stop() {
               isRunning = false;
-              if (timer) {
-                clearInterval(timer);
-                timer = null;
-              }
+              if (timer) { clearInterval(timer); timer = null; }
               document.getElementById("start").style.opacity = "1";
             }
 
             document.getElementById("start").onclick = start;
             document.getElementById("stop").onclick = stop;
-          }, false);
+          });
           </script>
           </body>
           </html>
           EOF
 
+      - name: Sync Capacitor Android Project
+        run: |
+          cd velometronome
+          npx cap sync android
+
       - name: Build Android APK
         run: |
-          cd metronome
-          cordova build android --debug
+          cd velometronome/android
+          ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: VeloMetronome-APK
-          path: metronome/platforms/android/app/build/outputs/apk/debug/app-debug.apk
+          path: velometronome/android/app/build/outputs/apk/debug/app-debug.apk
