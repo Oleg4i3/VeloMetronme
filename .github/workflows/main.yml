@@ -44,9 +44,24 @@ jobs:
           chmod +x gradlew
           wget -q https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradle/wrapper/gradle-wrapper.jar -O gradle/wrapper/gradle-wrapper.jar
 
+      # ---------- settings.gradle с репозиториями плагинов ----------
       - name: Write settings.gradle
         run: |
           cat > settings.gradle << 'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
           rootProject.name = "VeloMetronome"
           include ':app'
           EOF
@@ -106,12 +121,12 @@ jobs:
           </manifest>
           EOF
 
-      # ---------- Ресурсы (хотя бы пустые) ----------
+      # ---------- Ресурсы ----------
       - name: Write strings.xml
         run: |
           echo '<resources><string name="app_name">VeloMetronome</string></resources>' > app/src/main/res/values/strings.xml
 
-      # ---------- Главный Java-файл ----------
+      # ---------- Главный Java-файл (без изменений, работает) ----------
       - name: Write MainActivity.java
         run: |
           cat > app/src/main/java/com/velo/metronome/MainActivity.java << 'JAVAEOF'
