@@ -19,7 +19,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'   # <-- изменено на 21
 
       - name: Install Capacitor CLI and ImageMagick
         run: |
@@ -36,7 +36,6 @@ jobs:
           npm install @capacitor/android
           npx cap add android
           
-          # Устанавливаем нужные плагины
           npm install @capacitor-community/volume-buttons
           npm install @capacitor/haptics
 
@@ -117,7 +116,6 @@ jobs:
           let beatCount = 0;
           let isScreenOff = false;
 
-          // Ожидаем deviceready (Capacitor)
           document.addEventListener('deviceready', () => {
             const bpmSlider = document.getElementById("bpm");
             const bpmVal = document.getElementById("bpmVal");
@@ -127,7 +125,6 @@ jobs:
 
             bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
 
-            // Кнопки громкости
             VolumeButtons.addListener('volumeUpButton', () => {
               if (isScreenOff) toggle();
             });
@@ -168,7 +165,6 @@ jobs:
               gain.connect(ctx.destination);
               source.start(time);
 
-              // Вибрация
               const doVib = (strong && vibStrong.checked) || (!strong && vibWeak.checked);
               if (doVib) {
                 const delayMs = Math.max(0, (time - ctx.currentTime) * 1000);
@@ -176,7 +172,6 @@ jobs:
                   try {
                     await Haptics.impact({ style: ImpactStyle.Medium });
                   } catch (e) {
-                    // Fallback на обычную вибрацию
                     if (navigator.vibrate) navigator.vibrate(40);
                   }
                 }, delayMs);
