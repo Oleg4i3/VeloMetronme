@@ -1,4 +1,4 @@
-name: Build Metronome APK
+name: Build VeloMetronome APK
 
 on:
   push:
@@ -26,10 +26,40 @@ jobs:
 
       - name: Create Cordova Project
         run: |
-          cordova create metronome com.example.metronome Metronome
+          cordova create metronome com.velo.metronome VeloMetronome
           cd metronome
           cordova platform add android
+          
+          # Плагины для работы
           cordova plugin add cordova-plugin-vibration
+          cordova plugin add cordova-plugin-background-mode
+          # Плагин для отслеживания кнопок громкости даже в фоне
+          cordova plugin add cordova-plugin-volume-buttons
+
+      - name: Create App Icon
+        run: |
+          # Создаем простую иконку (заглушку) через базовую PNG-строку (красный ромб)
+          mkdir -p metronome/res/icon/android
+          echo "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH5gMREh0XzD99VAAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLm3EAAABEUlEQVR42u3dsQ3CQBQE0S9ncA50QAt0QS00QCf0XwjSByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SByIn0SB5n5R5pX3O7pAAAAAElFTkSuQmCC" | base64 -d > metronome/www/icon.png
+          cp metronome/www/icon.png metronome/res/icon/android/icon.png
+
+      - name: Configure config.xml
+        run: |
+          cat << 'EOF' > metronome/config.xml
+          <?xml version='1.0' encoding='utf-8'?>
+          <widget id="com.velo.metronome" version="1.0.0" xmlns="http://www.w3.org/ns/widgets">
+              <name>VeloMetronome</name>
+              <description>Bicycle Cadence Metronome</description>
+              <author email="dev@example.com">Developer</author>
+              <content src="index.html" />
+              <access origin="*" />
+              <allow-intent href="http://*/*" />
+              <allow-intent href="https://*/*" />
+              <preference name="Orientation" value="portrait" />
+              <preference name="KeepRunning" value="true" />
+              <icon src="www/icon.png" />
+          </widget>
+          EOF
 
       - name: Write Application Source
         run: |
@@ -39,173 +69,130 @@ jobs:
           <head>
           <meta charset="utf-8">
           <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: gap: https://ssl.gstatic.com 'unsafe-eval' 'unsafe-inline' blob:; media-src * data:; img-src 'self' data: content:;">
-          <meta name="format-detection" content="telephone=no">
-          <meta name="msapplication-tap-highlight" content="no">
           <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
-          <title>Bike Cadence Metronome</title>
+          <title>VeloMetronome</title>
           <style>
-          body { font-family: sans-serif; padding: 20px; background:#111; color:#eee; }
-          button, input { font-size: 18px; margin: 12px 0; }
-          input[type=range]{ width: 100%; }
+          body { font-family: sans-serif; padding: 30px; background:#000; color:#fff; text-align:center; }
+          button { width: 100%; padding: 20px; font-size: 24px; margin: 10px 0; background: #333; color: white; border: 1px solid #555; }
+          #start { background: #1a4d1a; }
+          #stop { background: #4d1a1a; }
+          input[type=range] { width: 100%; height: 50px; }
+          h2 { color: #f14f4d; }
+          .status { font-size: 14px; color: #888; margin-top: 20px; }
           </style>
           </head>
           <body>
-          <h2>Cadence metronome</h2>
-          <label>BPM: <span id="bpmVal">90</span></label><br>
+          <h2>VeloMetronome</h2>
+          <div style="font-size: 48px;" id="bpmVal">90</div>
           <input id="bpm" type="range" min="40" max="180" value="90">
-          <br>
-          <button id="start">Start</button>
-          <button id="stop">Stop</button>
-
-          <audio id="silentAudio" loop src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA" style="display:none;"></audio>
+          <button id="start">START</button>
+          <button id="stop">STOP</button>
+          <div class="status">Кнопки громкости: Toggle (экран выкл)</div>
+          
+          <audio id="silentAudio" loop src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
 
           <script src="cordova.js"></script>
           <script>
-          // 2. Web Worker: независимый от UI поток для точного таймера в фоне
           const workerCode = `
               let timer = null;
               self.onmessage = function(e) {
-                  if (e.data === 'start') {
-                      timer = setInterval(() => postMessage('tick'), 25);
-                  } else if (e.data === 'stop') {
-                      clearInterval(timer);
-                  }
+                  if (e.data === 'start') timer = setInterval(() => postMessage('tick'), 25);
+                  else if (e.data === 'stop') clearInterval(timer);
               };
           `;
           const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
           const timerWorker = new Worker(URL.createObjectURL(workerBlob));
 
           document.addEventListener('deviceready', function() {
-              let ctx;
-              let isRunning = false;
-              let beat = 0;
-              let nextTime = 0;
-              let lastVolumeClickTime = 0;
+              let ctx, isRunning = false, beat = 0, nextTime = 0, lastVolTime = 0;
+              let isPaused = false; // Состояние экрана
 
               const bpmSlider = document.getElementById("bpm");
               const bpmVal = document.getElementById("bpmVal");
               const silentAudio = document.getElementById("silentAudio");
 
-              bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
+              // Настройка фонового режима
+              cordova.plugins.backgroundMode.enable();
+              cordova.plugins.backgroundMode.setDefaults({ silent: true });
 
-              // Защита от краша: принудительно восстанавливаем AudioContext при разблокировке экрана
-              document.addEventListener('resume', () => {
-                  if (ctx && ctx.state === 'suspended') {
-                      ctx.resume();
-                  }
+              document.addEventListener('pause', () => { isPaused = true; }, false);
+              document.addEventListener('resume', () => { 
+                  isPaused = false; 
+                  if (ctx && ctx.state === 'suspended') ctx.resume();
               }, false);
 
-              // --- Звуковой синтезатор ---
-              function noiseBuffer(ctx, duration=0.06) {
-                  const rate = ctx.sampleRate;
-                  const buffer = ctx.createBuffer(1, rate * duration, rate);
-                  const data = buffer.getChannelData(0);
-                  for (let i = 0; i < data.length; i++) {
-                      data[i] = (Math.random()*2 - 1) * 0.8;
+              // Обработка громкости: 
+              // Если экран выключен (isPaused), то двойное нажатие громкости переключает метроном.
+              // При включенном экране работает стандартная регулировка.
+              function handleVolume() {
+                  if (!isPaused) return; // Если экран горит, ничего не перехватываем
+                  
+                  const now = Date.now();
+                  if (now - lastVolTime < 600) {
+                      toggle();
+                      lastVolTime = 0;
+                  } else {
+                      lastVolTime = now;
                   }
-                  return buffer;
+              }
+              window.addEventListener('volumeupbutton', handleVolume, false);
+              window.addEventListener('volumedownbutton', handleVolume, false);
+
+              bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
+
+              function noiseBuffer(ctx, dur=0.06) {
+                  const b = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+                  const d = b.getChannelData(0);
+                  for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2 - 1) * 0.7;
+                  return b;
               }
 
-              function playBeat(time, strong=false) {
-                  const source = ctx.createBufferSource();
-                  source.buffer = noiseBuffer(ctx, strong ? 0.09 : 0.06);
-
-                  const filter = ctx.createBiquadFilter();
-                  filter.type = "bandpass";
-                  filter.frequency.value = strong ? 2200 : 1400;
-                  filter.Q.value = 6;
-
-                  const highShelf = ctx.createBiquadFilter();
-                  highShelf.type = "highshelf";
-                  highShelf.frequency.value = 2000;
-                  highShelf.gain.value = strong ? 6 : 3;
-
-                  const gain = ctx.createGain();
-                  gain.gain.value = strong ? 1.6 : 0.9;
-
-                  const comp = ctx.createDynamicsCompressor();
-                  comp.threshold.value = -18;
-                  comp.knee.value = 20;
-                  comp.ratio.value = 6;
-                  comp.attack.value = 0.003;
-                  comp.release.value = 0.15;
-
-                  source.connect(filter);
-                  filter.connect(highShelf);
-                  highShelf.connect(gain);
-                  gain.connect(comp);
-                  comp.connect(ctx.destination);
-
-                  source.start(time);
+              function playBeat(time, strong) {
+                  const s = ctx.createBufferSource();
+                  s.buffer = noiseBuffer(ctx, strong ? 0.08 : 0.05);
+                  const f = ctx.createBiquadFilter();
+                  f.type = "bandpass";
+                  f.frequency.value = strong ? 2200 : 1200;
+                  const g = ctx.createGain();
+                  g.gain.value = strong ? 1.5 : 0.7;
+                  s.connect(f); f.connect(g); g.connect(ctx.destination);
+                  s.start(time);
               }
 
-              function scheduler() {
-                  const bpm = parseInt(bpmSlider.value);
-                  const interval = 60 / bpm;
-
+              timerWorker.onmessage = function() {
+                  if (!isRunning) return;
+                  const interval = 60 / parseInt(bpmSlider.value);
                   while (nextTime < ctx.currentTime + 0.1) {
                       beat++;
-                      const strong = (beat % 2 === 1);
-                      playBeat(nextTime, strong);
-
-                      if (!strong) {
+                      const isStrong = (beat % 2 === 1);
+                      playBeat(nextTime, isStrong);
+                      
+                      // ВИБРО НА СЛАБУЮ ДОЛЮ (beat % 2 === 0)
+                      if (!isStrong) {
                           const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
-                          setTimeout(() => {
-                              if (navigator.vibrate) navigator.vibrate(40);
-                          }, delay);
+                          setTimeout(() => { navigator.vibrate(50); }, delay);
                       }
                       nextTime += interval;
                   }
-              }
-
-              // Web Worker вызывает эту функцию каждые 25мс независимо от того, спит ли основной UI
-              timerWorker.onmessage = function(e) {
-                  if (e.data === 'tick' && isRunning) {
-                      scheduler();
-                  }
               };
 
-              function toggleMetronome() {
-                  if (isRunning) stop();
-                  else start();
-              }
-
-              // --- Двойное нажатие громкости (<500 мс) ---
-              function handleVolumeButton() {
-                  const currentTime = new Date().getTime();
-                  if (currentTime - lastVolumeClickTime < 500) {
-                      toggleMetronome();
-                      lastVolumeClickTime = 0;
-                  } else {
-                      lastVolumeClickTime = currentTime;
-                  }
-              }
-
-              // Обработчики кнопок громкости
-              document.addEventListener("volumeupbutton", handleVolumeButton, false);
-              document.addEventListener("volumedownbutton", handleVolumeButton, false);
+              function toggle() { isRunning ? stop() : start(); }
 
               function start() {
                   if (isRunning) return;
-                  
                   if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-                  if (ctx.state === 'suspended') ctx.resume();
-
-                  // Запускаем тихий трек для блокировки "сна" устройства
-                  silentAudio.play().catch(e => console.log("Audio lock failed:", e));
-
-                  isRunning = true;
-                  beat = 0;
-                  nextTime = ctx.currentTime + 0.05;
-                  
-                  // Запускаем планировщик в Worker
+                  ctx.resume();
+                  silentAudio.play().catch(()=>{});
+                  isRunning = true; beat = 0; nextTime = ctx.currentTime + 0.05;
                   timerWorker.postMessage('start');
+                  document.getElementById("start").style.border = "4px solid white";
               }
 
               function stop() {
                   isRunning = false;
                   timerWorker.postMessage('stop');
                   silentAudio.pause();
+                  document.getElementById("start").style.border = "1px solid #555";
               }
 
               document.getElementById("start").onclick = start;
@@ -219,10 +206,10 @@ jobs:
       - name: Build Android APK
         run: |
           cd metronome
-          cordova build android
+          cordova build android --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Metronome-APK
-          path: metronome/platforms/android/app/build/outputs/apk/debug/app-debug.apk
+          name: VeloMetronome-APK
+          path: metronome/platforms/android/app/build/outputs/apk/release/app-release-unsigned.apk
