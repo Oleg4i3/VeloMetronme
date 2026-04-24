@@ -55,8 +55,8 @@ jobs:
                   applicationId = "com.example.metronome"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 5
-                  versionName = "1.4"
+                  versionCode = 6
+                  versionName = "1.5"
               }
               compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
               kotlinOptions { jvmTarget = "17" }
@@ -103,6 +103,7 @@ jobs:
               var vibStrong = false
               var vibWeak = true
               var isPlaying = false
+              var lastToggleTime = 0L // Таймер для защиты от двойного срабатывания кнопок
               var uiCallback: (() -> Unit)? = null
           }
 
@@ -171,7 +172,6 @@ jobs:
                       setPadding(0, 40, 0, 40)
                       setOnClickListener {
                           if (MetronomeState.isPlaying) {
-                              // Полностью убиваем процесс при нажатии STOP
                               startService(Intent(this@MainActivity, MetronomeService::class.java).setAction("KILL"))
                           } else {
                               startForegroundService(Intent(this@MainActivity, MetronomeService::class.java).setAction("START"))
@@ -219,6 +219,7 @@ jobs:
           class MetronomeService : Service() {
               private lateinit var audioStrong: AudioTrack
               private lateinit var audioWeak: AudioTrack
+              private lateinit var silentTrack: AudioTrack // Хак для выключенного экрана
               private lateinit var wakeLock: PowerManager.WakeLock
               private lateinit var mediaSession: MediaSessionCompat
               private lateinit var vibrator: Vibrator
@@ -243,6 +244,7 @@ jobs:
                   wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Velo::Lock")
 
                   setupAudio()
+                  silentTrack.play() // Запускаем бесконечную тишину, чтобы система не отбирала фокус кнопок
                   setupMediaSession()
               }
 
@@ -252,7 +254,10 @@ jobs:
                   val numSamples = (duration * sampleRate).toInt()
                   val buffer = FloatArray(numSamples)
                   
-                  var lastNoise = 0f
+                  val hist = FloatArray(15) // Буфер для усреднения (среза высоких частот)
+                  var histIdx = 0
+                  var sum = 0f
+                  
                   for (i in 0 until numSamples) {
                       val noise = (Math.random() * 2 - 1).toFloat()
                       val attackLimit = numSamples * 0.4 
@@ -260,11 +265,22 @@ jobs:
                                      else (1.0 - (i - attackLimit) / (numSamples - attackLimit)).toFloat()
                       
                       if (isStrong) {
+                          // Сильная доля: резкий широкий шум
                           buffer[i] = noise * envelope * 1.0f
                       } else {
-                          val smoothed = (noise + lastNoise) / 2f
-                          lastNoise = noise
-                          buffer[i] = smoothed * envelope * 0.5f
+                          // Слабая доля: сильный Low-pass фильтр
+                          sum -= hist[histIdx]
+                          hist[histIdx] = noise
+                          sum += noise
+                          histIdx = (histIdx + 1) % 15
+                          
+                          // Компенсируем падение громкости из-за фильтра (*3.0f) и обрезаем перегруз
+                          var smoothed = (sum / 15f) * 3.0f
+                          if (smoothed > 1f) smoothed = 1f
+                          if (smoothed < -1f) smoothed = -1f
+                          
+                          // Делаем тише сильной доли
+                          buffer[i] = smoothed * envelope * 0.4f
                       }
                   }
 
@@ -289,15 +305,37 @@ jobs:
               private fun setupAudio() {
                   audioStrong = createTrack(true)
                   audioWeak = createTrack(false)
+                  
+                  // Создаем трек тишины (1 секунда нулей)
+                  val silentBuffer = FloatArray(44100)
+                  silentTrack = AudioTrack.Builder()
+                      .setAudioAttributes(AudioAttributes.Builder()
+                          .setUsage(AudioAttributes.USAGE_MEDIA)
+                          .build())
+                      .setAudioFormat(AudioFormat.Builder()
+                          .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                          .setSampleRate(44100)
+                          .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                          .build())
+                      .setBufferSizeInBytes(silentBuffer.size * 4)
+                      .setTransferMode(AudioTrack.MODE_STATIC)
+                      .build()
+                      
+                  silentTrack.write(silentBuffer, 0, silentBuffer.size, AudioTrack.WRITE_BLOCKING)
+                  silentTrack.setLoopPoints(0, silentBuffer.size, -1) // Зациклить навечно
               }
 
               private fun setupMediaSession() {
                   mediaSession = MediaSessionCompat(this, "VeloMetronome")
                   
-                  // Хак: Подменяем управление громкостью, чтобы ловить кнопки громкости
                   val volumeProvider = object : VolumeProviderCompat(VolumeProviderCompat.VOLUME_CONTROL_RELATIVE, 100, 50) {
                       override fun onAdjustVolume(direction: Int) {
-                          startService(Intent(this@MetronomeService, MetronomeService::class.java).setAction("TOGGLE"))
+                          val now = System.currentTimeMillis()
+                          // Debounce: игнорируем сигналы, пришедшие быстрее чем за 500мс
+                          if (now - MetronomeState.lastToggleTime > 500) {
+                              MetronomeState.lastToggleTime = now
+                              startService(Intent(this@MetronomeService, MetronomeService::class.java).setAction("TOGGLE"))
+                          }
                       }
                   }
                   
@@ -353,7 +391,6 @@ jobs:
                           beat++
                           val isStrong = beat % 2 == 1
                           
-                          // Играем звук, только если включен чекбокс
                           if (MetronomeState.soundEnabled) {
                               val trackToPlay = if (isStrong) audioStrong else audioWeak
                               trackToPlay.stop()
@@ -363,7 +400,8 @@ jobs:
 
                           val shouldVibrate = (isStrong && MetronomeState.vibStrong) || (!isStrong && MetronomeState.vibWeak)
                           if (shouldVibrate) {
-                              val duration = if (isStrong) 60L else 40L
+                              // Сильная доля теперь 150мс!
+                              val duration = if (isStrong) 150L else 40L
                               val effect = VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE)
                               val attr = AudioAttributes.Builder()
                                   .setUsage(AudioAttributes.USAGE_MEDIA) 
@@ -384,6 +422,8 @@ jobs:
                   MetronomeState.uiCallback?.invoke()
                   if (wakeLock.isHeld) wakeLock.release()
                   mediaSession.release()
+                  silentTrack.stop()
+                  silentTrack.release()
                   audioStrong.release()
                   audioWeak.release()
                   super.onDestroy()
