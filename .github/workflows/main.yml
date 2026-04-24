@@ -26,6 +26,12 @@ jobs:
           mkdir -p app/src/main/java/com/example/metronome
           mkdir -p app/src/main/res/mipmap
           
+          # 0. Включаем поддержку AndroidX (Именно тут падала сборка!)
+          cat << 'EOF' > gradle.properties
+          android.useAndroidX=true
+          android.enableJetifier=true
+          EOF
+          
           # 1. Настройки проекта
           cat << 'EOF' > settings.gradle.kts
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
@@ -41,19 +47,21 @@ jobs:
           }
           EOF
 
-          # 2. Модуль (добавили поддержку Foreground Service)
+          # 2. Модуль (откатываем compileSdk на 33, чтобы убрать предупреждения)
           cat << 'EOF' > app/build.gradle.kts
           plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
           android {
               namespace = "com.example.metronome"
-              compileSdk = 34
+              compileSdk = 33
               defaultConfig {
                   applicationId = "com.example.metronome"
                   minSdk = 26
-                  targetSdk = 34
+                  targetSdk = 33
                   versionCode = 2
                   versionName = "1.1"
               }
+              compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+              kotlinOptions { jvmTarget = "17" }
           }
           dependencies {
               implementation("androidx.core:core-ktx:1.12.0")
@@ -136,7 +144,6 @@ jobs:
           import android.support.v4.media.session.MediaSessionCompat
           import android.support.v4.media.session.PlaybackStateCompat
           import kotlin.concurrent.thread
-          import kotlin.math.random
 
           class MetronomeService : Service() {
               private var isRunning = false
@@ -219,12 +226,12 @@ jobs:
 
               private fun toggle() {
                   if (isRunning) {
-                      isRunning = false
-                      if (wakeLock.isHeld) wakeLock.release()
+                          isRunning = false
+                          if (wakeLock.isHeld) wakeLock.release()
                   } else {
-                      isRunning = true
-                      wakeLock.acquire(2*60*60*1000L)
-                      startLoop()
+                          isRunning = true
+                          wakeLock.acquire(2*60*60*1000L)
+                          startLoop()
                   }
               }
 
