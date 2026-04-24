@@ -55,8 +55,8 @@ jobs:
                   applicationId = "com.example.metronome"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 4
-                  versionName = "1.3"
+                  versionCode = 5
+                  versionName = "1.4"
               }
               compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
               kotlinOptions { jvmTarget = "17" }
@@ -99,6 +99,7 @@ jobs:
 
           object MetronomeState {
               var bpm = 90
+              var soundEnabled = true
               var vibStrong = false
               var vibWeak = true
               var isPlaying = false
@@ -138,6 +139,15 @@ jobs:
                       })
                   }
 
+                  val soundCb = CheckBox(this).apply {
+                      text = "Звук (маракасы)"
+                      setTextColor(Color.WHITE)
+                      textSize = 18f
+                      isChecked = MetronomeState.soundEnabled
+                      setPadding(0, 0, 0, 30)
+                      setOnCheckedChangeListener { _, isChecked -> MetronomeState.soundEnabled = isChecked }
+                  }
+
                   val vibStrongCb = CheckBox(this).apply {
                       text = "Вибро на сильную долю"
                       setTextColor(Color.WHITE)
@@ -161,7 +171,8 @@ jobs:
                       setPadding(0, 40, 0, 40)
                       setOnClickListener {
                           if (MetronomeState.isPlaying) {
-                              startService(Intent(this@MainActivity, MetronomeService::class.java).setAction("STOP"))
+                              // Полностью убиваем процесс при нажатии STOP
+                              startService(Intent(this@MainActivity, MetronomeService::class.java).setAction("KILL"))
                           } else {
                               startForegroundService(Intent(this@MainActivity, MetronomeService::class.java).setAction("START"))
                           }
@@ -170,6 +181,7 @@ jobs:
 
                   layout.addView(bpmText)
                   layout.addView(bpmSlider)
+                  layout.addView(soundCb)
                   layout.addView(vibStrongCb)
                   layout.addView(vibWeakCb)
                   layout.addView(startBtn)
@@ -181,7 +193,7 @@ jobs:
               }
 
               private fun updateBtn() {
-                  startBtn.text = if (MetronomeState.isPlaying) "STOP" else "START"
+                  startBtn.text = if (MetronomeState.isPlaying) "STOP AND EXIT" else "START"
                   startBtn.setBackgroundColor(if (MetronomeState.isPlaying) Color.parseColor("#882222") else Color.parseColor("#444444"))
               }
 
@@ -201,6 +213,7 @@ jobs:
           import android.os.*
           import android.support.v4.media.session.MediaSessionCompat
           import android.support.v4.media.session.PlaybackStateCompat
+          import androidx.media.VolumeProviderCompat
           import kotlin.concurrent.thread
 
           class MetronomeService : Service() {
@@ -220,7 +233,7 @@ jobs:
                   
                   val notification = Notification.Builder(this, "m")
                       .setContentTitle("Velo Maracas")
-                      .setContentText("Use Media keys to toggle")
+                      .setContentText("Volume buttons: Pause/Play")
                       .setSmallIcon(android.R.drawable.ic_media_play)
                       .build()
                   
@@ -247,10 +260,8 @@ jobs:
                                      else (1.0 - (i - attackLimit) / (numSamples - attackLimit)).toFloat()
                       
                       if (isStrong) {
-                          // Яркий шум на 100% громкости
                           buffer[i] = noise * envelope * 1.0f
                       } else {
-                          // Глухой шум (срезаем высокие частоты усреднением) на 50% громкости
                           val smoothed = (noise + lastNoise) / 2f
                           lastNoise = noise
                           buffer[i] = smoothed * envelope * 0.5f
@@ -259,7 +270,7 @@ jobs:
 
                   val track = AudioTrack.Builder()
                       .setAudioAttributes(AudioAttributes.Builder()
-                          .setUsage(AudioAttributes.USAGE_MEDIA) // ИСПОЛЬЗУЕМ КАНАЛ МЕДИА (НЕТ ВСПЫШКЕ!)
+                          .setUsage(AudioAttributes.USAGE_MEDIA) 
                           .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                           .build())
                       .setAudioFormat(AudioFormat.Builder()
@@ -282,12 +293,15 @@ jobs:
 
               private fun setupMediaSession() {
                   mediaSession = MediaSessionCompat(this, "VeloMetronome")
-                  mediaSession.setCallback(object : MediaSessionCompat.Callback() {
-                      override fun onMediaButtonEvent(mediaButtonEvent: Intent): Boolean {
-                          if (MetronomeState.isPlaying) stopSelf()
-                          return true
+                  
+                  // Хак: Подменяем управление громкостью, чтобы ловить кнопки громкости
+                  val volumeProvider = object : VolumeProviderCompat(VolumeProviderCompat.VOLUME_CONTROL_RELATIVE, 100, 50) {
+                      override fun onAdjustVolume(direction: Int) {
+                          startService(Intent(this@MetronomeService, MetronomeService::class.java).setAction("TOGGLE"))
                       }
-                  })
+                  }
+                  
+                  mediaSession.setPlaybackToRemote(volumeProvider)
                   
                   val state = PlaybackStateCompat.Builder()
                       .setActions(PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_STOP)
@@ -299,16 +313,34 @@ jobs:
               }
 
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-                  if (intent?.action == "STOP") {
-                      stopSelf()
-                      return START_NOT_STICKY
-                  }
-                  
-                  if (!MetronomeState.isPlaying) {
-                      MetronomeState.isPlaying = true
-                      MetronomeState.uiCallback?.invoke()
-                      wakeLock.acquire(2*60*60*1000L)
-                      startLoop()
+                  when (intent?.action) {
+                      "KILL" -> {
+                          MetronomeState.isPlaying = false
+                          MetronomeState.uiCallback?.invoke()
+                          if (wakeLock.isHeld) wakeLock.release()
+                          stopSelf()
+                          return START_NOT_STICKY
+                      }
+                      "START" -> {
+                          if (!MetronomeState.isPlaying) {
+                              MetronomeState.isPlaying = true
+                              MetronomeState.uiCallback?.invoke()
+                              if (!wakeLock.isHeld) wakeLock.acquire(2*60*60*1000L)
+                              startLoop()
+                          }
+                      }
+                      "TOGGLE" -> {
+                          if (MetronomeState.isPlaying) {
+                              MetronomeState.isPlaying = false
+                              MetronomeState.uiCallback?.invoke()
+                              if (wakeLock.isHeld) wakeLock.release()
+                          } else {
+                              MetronomeState.isPlaying = true
+                              MetronomeState.uiCallback?.invoke()
+                              if (!wakeLock.isHeld) wakeLock.acquire(2*60*60*1000L)
+                              startLoop()
+                          }
+                      }
                   }
                   return START_STICKY
               }
@@ -321,17 +353,18 @@ jobs:
                           beat++
                           val isStrong = beat % 2 == 1
                           
-                          // Выбираем нужный трек в зависимости от доли
-                          val trackToPlay = if (isStrong) audioStrong else audioWeak
-                          trackToPlay.stop()
-                          trackToPlay.reloadStaticData()
-                          trackToPlay.play()
+                          // Играем звук, только если включен чекбокс
+                          if (MetronomeState.soundEnabled) {
+                              val trackToPlay = if (isStrong) audioStrong else audioWeak
+                              trackToPlay.stop()
+                              trackToPlay.reloadStaticData()
+                              trackToPlay.play()
+                          }
 
                           val shouldVibrate = (isStrong && MetronomeState.vibStrong) || (!isStrong && MetronomeState.vibWeak)
                           if (shouldVibrate) {
                               val duration = if (isStrong) 60L else 40L
                               val effect = VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE)
-                              // Вибрация тоже через канал MEDIA
                               val attr = AudioAttributes.Builder()
                                   .setUsage(AudioAttributes.USAGE_MEDIA) 
                                   .build()
