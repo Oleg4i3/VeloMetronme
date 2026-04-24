@@ -92,8 +92,10 @@ jobs:
               const bpmSlider = document.getElementById("bpm");
               const bpmVal = document.getElementById("bpmVal");
               const silentAudio = document.getElementById("silentAudio");
-              const vibStrongCheckbox = document.getElementById("vibStrong");
-              const vibWeakCheckbox = document.getElementById("vibWeak");
+              
+              // Получаем ссылки на чекбоксы
+              const vibStrongCb = document.getElementById("vibStrong");
+              const vibWeakCb = document.getElementById("vibWeak");
 
               bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
 
@@ -155,17 +157,19 @@ jobs:
                       const strong = (beat % 2 === 1);
                       playBeat(nextTime, strong);
 
-                      const doVibStrong = strong && vibStrongCheckbox.checked;
-                      const doVibWeak = !strong && vibWeakCheckbox.checked;
+                      // Проверяем, стоит ли галочка для текущей доли
+                      const shouldVibrate = (strong && vibStrongCb.checked) || (!strong && vibWeakCb.checked);
 
-                      if (doVibStrong || doVibWeak) {
+                      if (shouldVibrate) {
                           const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
-                          const vibDuration = strong ? 60 : 40; 
+                          // Делаем сильную долю чуть длиннее (60мс) для тактильного отличия от слабой (40мс)
+                          const vibDuration = strong ? 60 : 40;
                           
                           setTimeout(() => {
                               if (navigator.vibrate) navigator.vibrate(vibDuration);
                           }, delay);
                       }
+                      
                       nextTime += interval;
                   }
               }
