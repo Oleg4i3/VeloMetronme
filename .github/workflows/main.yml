@@ -26,10 +26,11 @@ jobs:
           mkdir -p app/src/main/java/com/example/metronome
           mkdir -p app/src/main/res/mipmap
           
-          # 0. Включаем поддержку AndroidX (Именно тут падала сборка!)
+          # 0. Настройки Gradle (AndroidX и подавление предупреждений SDK 34)
           cat << 'EOF' > gradle.properties
           android.useAndroidX=true
           android.enableJetifier=true
+          android.suppressUnsupportedCompileSdk=34
           EOF
           
           # 1. Настройки проекта
@@ -47,18 +48,18 @@ jobs:
           }
           EOF
 
-          # 2. Модуль (откатываем compileSdk на 33, чтобы убрать предупреждения)
+          # 2. Модуль (compileSdk 34)
           cat << 'EOF' > app/build.gradle.kts
           plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
           android {
               namespace = "com.example.metronome"
-              compileSdk = 33
+              compileSdk = 34
               defaultConfig {
                   applicationId = "com.example.metronome"
                   minSdk = 26
-                  targetSdk = 33
-                  versionCode = 2
-                  versionName = "1.1"
+                  targetSdk = 34
+                  versionCode = 3
+                  versionName = "1.2"
               }
               compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
               kotlinOptions { jvmTarget = "17" }
@@ -69,7 +70,7 @@ jobs:
           }
           EOF
 
-          # 3. Манифест (Разрешения на сервис и кнопки)
+          # 3. Манифест
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -90,7 +91,7 @@ jobs:
           </manifest>
           EOF
 
-          # 4. MainActivity.kt (Только UI и запуск сервиса)
+          # 4. MainActivity.kt (ВЕРНУЛ ПОЛЗУНКИ И ЧЕКБОКСЫ!)
           cat << 'EOF' > app/src/main/java/com/example/metronome/MainActivity.kt
           package com.example.metronome
 
@@ -101,7 +102,18 @@ jobs:
           import android.graphics.Color
           import android.view.Gravity
 
+          // Общее состояние для UI и Сервиса
+          object MetronomeState {
+              var bpm = 90
+              var vibStrong = false
+              var vibWeak = true
+              var isPlaying = false
+              var uiCallback: (() -> Unit)? = null
+          }
+
           class MainActivity : Activity() {
+              private lateinit var startBtn: Button
+
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
                   val layout = LinearLayout(this).apply {
@@ -110,30 +122,83 @@ jobs:
                       setBackgroundColor(Color.parseColor("#111111"))
                   }
 
-                  val statusText = TextView(this).apply {
-                      text = "Velo Maracas\n(Press Vol+ to Start/Stop)"
-                      textSize = 24f
+                  val bpmText = TextView(this).apply {
+                      text = "BPM: ${MetronomeState.bpm}"
+                      textSize = 28f
                       setTextColor(Color.WHITE)
                       gravity = Gravity.CENTER
-                      setPadding(0, 0, 0, 80)
+                      setPadding(0, 0, 0, 20)
                   }
 
-                  val startBtn = Button(this).apply {
-                      text = "START SERVICE"
+                  val bpmSlider = SeekBar(this).apply {
+                      max = 140 
+                      progress = MetronomeState.bpm - 40
+                      setPadding(0, 0, 0, 80)
+                      setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                          override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                              MetronomeState.bpm = progress + 40
+                              bpmText.text = "BPM: ${MetronomeState.bpm}"
+                          }
+                          override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                          override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                      })
+                  }
+
+                  val vibStrongCb = CheckBox(this).apply {
+                      text = "Вибро на сильную долю"
+                      setTextColor(Color.WHITE)
+                      textSize = 18f
+                      isChecked = MetronomeState.vibStrong
+                      setPadding(0, 0, 0, 30)
+                      setOnCheckedChangeListener { _, isChecked -> MetronomeState.vibStrong = isChecked }
+                  }
+
+                  val vibWeakCb = CheckBox(this).apply {
+                      text = "Вибро на слабую долю"
+                      setTextColor(Color.WHITE)
+                      textSize = 18f
+                      isChecked = MetronomeState.vibWeak
+                      setPadding(0, 0, 0, 80)
+                      setOnCheckedChangeListener { _, isChecked -> MetronomeState.vibWeak = isChecked }
+                  }
+
+                  startBtn = Button(this).apply {
+                      textSize = 24f
+                      setPadding(0, 40, 0, 40)
                       setOnClickListener {
-                          val intent = Intent(this@MainActivity, MetronomeService::class.java)
-                          startForegroundService(intent)
+                          if (MetronomeState.isPlaying) {
+                              startService(Intent(this@MainActivity, MetronomeService::class.java).setAction("STOP"))
+                          } else {
+                              startForegroundService(Intent(this@MainActivity, MetronomeService::class.java).setAction("START"))
+                          }
                       }
                   }
 
-                  layout.addView(statusText)
+                  layout.addView(bpmText)
+                  layout.addView(bpmSlider)
+                  layout.addView(vibStrongCb)
+                  layout.addView(vibWeakCb)
                   layout.addView(startBtn)
+
                   setContentView(layout)
+
+                  MetronomeState.uiCallback = { runOnUiThread { updateBtn() } }
+                  updateBtn()
+              }
+
+              private fun updateBtn() {
+                  startBtn.text = if (MetronomeState.isPlaying) "STOP" else "START"
+                  startBtn.setBackgroundColor(if (MetronomeState.isPlaying) Color.parseColor("#882222") else Color.parseColor("#444444"))
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  MetronomeState.uiCallback = null
               }
           }
           EOF
 
-          # 5. MetronomeService.kt (ВСЯ ЛОГИКА ТУТ)
+          # 5. MetronomeService.kt (ВЕРНУЛ ВИБРАЦИЮ!)
           cat << 'EOF' > app/src/main/java/com/example/metronome/MetronomeService.kt
           package com.example.metronome
 
@@ -146,20 +211,22 @@ jobs:
           import kotlin.concurrent.thread
 
           class MetronomeService : Service() {
-              private var isRunning = false
-              private var bpm = 90
               private lateinit var audioTrack: AudioTrack
               private lateinit var wakeLock: PowerManager.WakeLock
               private lateinit var mediaSession: MediaSessionCompat
+              private lateinit var vibrator: Vibrator
+              private var loopThread: Thread? = null
               
               override fun onCreate() {
                   super.onCreate()
+                  vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
+                  
                   val nm = getSystemService(NotificationManager::class.java)
                   nm.createNotificationChannel(NotificationChannel("m", "Metronome", NotificationManager.IMPORTANCE_LOW))
                   
                   val notification = Notification.Builder(this, "m")
-                      .setContentTitle("Metronome Active")
-                      .setContentText("Use Volume Up to toggle")
+                      .setContentTitle("Velo Maracas")
+                      .setContentText("Use Media/Volume keys to toggle")
                       .setSmallIcon(android.R.drawable.ic_media_play)
                       .build()
                   
@@ -174,14 +241,13 @@ jobs:
 
               private fun setupAudio() {
                   val sampleRate = 44100
-                  val duration = 0.25 // 250ms для шуршания
+                  val duration = 0.25 // Мягкий шуршащий звук
                   val numSamples = (duration * sampleRate).toInt()
                   val buffer = FloatArray(numSamples)
                   
-                  // Генерируем "Маракас" (белый шум с мягкой атакой)
                   for (i in 0 until numSamples) {
                       val noise = (Math.random() * 2 - 1).toFloat()
-                      val attackLimit = numSamples * 0.5 // 50% времени на нарастание (МЯГКАЯ атака)
+                      val attackLimit = numSamples * 0.5 
                       val envelope = if (i < attackLimit) (i / attackLimit).toFloat() 
                                      else (1.0 - (i - attackLimit) / (numSamples - attackLimit)).toFloat()
                       buffer[i] = noise * envelope
@@ -202,15 +268,14 @@ jobs:
                       .build()
                   
                   audioTrack.write(buffer, 0, buffer.size, AudioTrack.WRITE_BLOCKING)
-                  audioTrack.setLoopPoints(0, 0, 0) // Без зацикливания
+                  audioTrack.setLoopPoints(0, 0, 0)
               }
 
               private fun setupMediaSession() {
                   mediaSession = MediaSessionCompat(this, "VeloMetronome")
                   mediaSession.setCallback(object : MediaSessionCompat.Callback() {
-                      // Ловим нажатия Volume через медиа-кнопки
                       override fun onMediaButtonEvent(mediaButtonEvent: Intent): Boolean {
-                          toggle()
+                          if (MetronomeState.isPlaying) stopSelf()
                           return true
                       }
                   })
@@ -224,26 +289,47 @@ jobs:
                   mediaSession.isActive = true
               }
 
-              private fun toggle() {
-                  if (isRunning) {
-                          isRunning = false
-                          if (wakeLock.isHeld) wakeLock.release()
-                  } else {
-                          isRunning = true
-                          wakeLock.acquire(2*60*60*1000L)
-                          startLoop()
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  if (intent?.action == "STOP") {
+                      stopSelf()
+                      return START_NOT_STICKY
                   }
+                  
+                  if (!MetronomeState.isPlaying) {
+                      MetronomeState.isPlaying = true
+                      MetronomeState.uiCallback?.invoke()
+                      wakeLock.acquire(2*60*60*1000L)
+                      startLoop()
+                  }
+                  return START_STICKY
               }
 
               private fun startLoop() {
-                  thread {
+                  loopThread = thread {
                       var nextTime = System.currentTimeMillis()
-                      while (isRunning) {
+                      var beat = 0
+                      while (MetronomeState.isPlaying) {
+                          beat++
+                          val isStrong = beat % 2 == 1
+                          
+                          // Звук маракаса
                           audioTrack.stop()
                           audioTrack.reloadStaticData()
-                          audioTrack.play() // Наш шуршащий маракас
+                          audioTrack.play()
 
-                          val interval = 60000L / bpm
+                          // Проверка чекбоксов и вызов вибрации (как ты и просил!)
+                          val shouldVibrate = (isStrong && MetronomeState.vibStrong) || (!isStrong && MetronomeState.vibWeak)
+                          if (shouldVibrate) {
+                              val duration = if (isStrong) 60L else 40L
+                              val effect = VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE)
+                              val attr = AudioAttributes.Builder()
+                                  .setUsage(AudioAttributes.USAGE_ALARM)
+                                  .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                  .build()
+                              try { vibrator.vibrate(effect, attr) } catch (e: Exception) {}
+                          }
+
+                          val interval = 60000L / MetronomeState.bpm
                           nextTime += interval
                           val sleep = nextTime - System.currentTimeMillis()
                           if (sleep > 0) Thread.sleep(sleep) else nextTime = System.currentTimeMillis()
@@ -251,20 +337,16 @@ jobs:
                   }
               }
 
-              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-                  toggle() // Запуск/стоп при нажатии кнопки в приложении
-                  return START_STICKY
-              }
-
-              override fun onBind(intent: Intent?) = null
-              
               override fun onDestroy() {
-                  isRunning = false
+                  MetronomeState.isPlaying = false
+                  MetronomeState.uiCallback?.invoke()
                   if (wakeLock.isHeld) wakeLock.release()
                   mediaSession.release()
                   audioTrack.release()
                   super.onDestroy()
               }
+              
+              override fun onBind(intent: Intent?) = null
           }
           EOF
 
