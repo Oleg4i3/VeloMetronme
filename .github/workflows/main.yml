@@ -1,4 +1,4 @@
-name: Build Native Metronome APK
+name: Build Native Metronome APK (Pro Version)
 
 on:
   push:
@@ -26,7 +26,7 @@ jobs:
           mkdir -p app/src/main/java/com/example/metronome
           mkdir -p app/src/main/res/mipmap
           
-          # 1. Настройки проекта Gradle
+          # 1. Настройки проекта
           cat << 'EOF' > settings.gradle.kts
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
           dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
@@ -34,7 +34,6 @@ jobs:
           include(":app")
           EOF
 
-          # 2. Корневой build.gradle
           cat << 'EOF' > build.gradle.kts
           plugins {
               id("com.android.application") version "8.1.0" apply false
@@ -42,226 +41,236 @@ jobs:
           }
           EOF
 
-          # 3. Модульный build.gradle (без сторонних зависимостей, sdk 33)
+          # 2. Модуль (добавили поддержку Foreground Service)
           cat << 'EOF' > app/build.gradle.kts
           plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
           android {
               namespace = "com.example.metronome"
-              compileSdk = 33
+              compileSdk = 34
               defaultConfig {
                   applicationId = "com.example.metronome"
                   minSdk = 26
-                  targetSdk = 33
-                  versionCode = 1
-                  versionName = "1.0"
+                  targetSdk = 34
+                  versionCode = 2
+                  versionName = "1.1"
               }
-              compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
-              kotlinOptions { jvmTarget = "17" }
+          }
+          dependencies {
+              implementation("androidx.core:core-ktx:1.12.0")
+              implementation("androidx.media:media:1.6.0")
           }
           EOF
 
-          # 4. AndroidManifest (запрашиваем вибрацию и запрет сна)
+          # 3. Манифест (Разрешения на сервис и кнопки)
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.VIBRATE" />
               <uses-permission android:name="android.permission.WAKE_LOCK" />
-              <application android:label="Bike Cadence" android:icon="@mipmap/ic_launcher" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-                  <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="portrait">
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+              
+              <application android:label="Velo Maracas" android:icon="@mipmap/ic_launcher" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
+                  <service android:name=".MetronomeService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
               </application>
           </manifest>
           EOF
 
-          # 5. MainActivity.kt (Вся логика и UI в одном файле)
+          # 4. MainActivity.kt (Только UI и запуск сервиса)
           cat << 'EOF' > app/src/main/java/com/example/metronome/MainActivity.kt
           package com.example.metronome
 
           import android.app.Activity
-          import android.media.AudioAttributes
-          import android.media.AudioManager
-          import android.media.ToneGenerator
+          import android.content.Intent
           import android.os.Bundle
-          import android.os.VibrationEffect
-          import android.os.Vibrator
-          import android.view.KeyEvent
-          import android.view.WindowManager
           import android.widget.*
           import android.graphics.Color
           import android.view.Gravity
-          import kotlin.concurrent.thread
 
           class MainActivity : Activity() {
-              private var isRunning = false
-              private var bpm = 90
-              private var beat = 0
-              private lateinit var vibrator: Vibrator
-              private lateinit var toneGen: ToneGenerator
-              private var lastVolumeClickTime = 0L
-
-              private lateinit var startStopBtn: Button
-              private lateinit var vibStrongCb: CheckBox
-              private lateinit var vibWeakCb: CheckBox
-
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
-                  vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
-                  toneGen = ToneGenerator(AudioManager.STREAM_ALARM, 100)
-
                   val layout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       setPadding(60, 100, 60, 60)
                       setBackgroundColor(Color.parseColor("#111111"))
                   }
 
-                  val titleText = TextView(this).apply {
-                      text = "Cadence Metronome"
-                      textSize = 28f
+                  val statusText = TextView(this).apply {
+                      text = "Velo Maracas\n(Press Vol+ to Start/Stop)"
+                      textSize = 24f
                       setTextColor(Color.WHITE)
                       gravity = Gravity.CENTER
                       setPadding(0, 0, 0, 80)
                   }
 
-                  val bpmText = TextView(this).apply {
-                      text = "BPM: 90"
-                      textSize = 24f
-                      setTextColor(Color.parseColor("#EEEEEE"))
-                      setPadding(0, 0, 0, 20)
-                  }
-
-                  val bpmSlider = SeekBar(this).apply {
-                      max = 140 
-                      progress = 50
-                      setPadding(0, 0, 0, 80)
-                  }
-                  
-                  bpmSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                          bpm = progress + 40
-                          bpmText.text = "BPM: $bpm"
+                  val startBtn = Button(this).apply {
+                      text = "START SERVICE"
+                      setOnClickListener {
+                          val intent = Intent(this@MainActivity, MetronomeService::class.java)
+                          startForegroundService(intent)
                       }
-                      override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                      override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-                  })
-
-                  vibStrongCb = CheckBox(this).apply {
-                      text = "Вибро на сильную долю"
-                      setTextColor(Color.WHITE)
-                      textSize = 18f
-                      setPadding(0, 0, 0, 30)
                   }
 
-                  vibWeakCb = CheckBox(this).apply {
-                      text = "Вибро на слабую долю"
-                      setTextColor(Color.WHITE)
-                      textSize = 18f
-                      isChecked = true
-                      setPadding(0, 0, 0, 80)
-                  }
-                  
-                  startStopBtn = Button(this).apply {
-                      text = "START"
-                      textSize = 24f
-                      setBackgroundColor(Color.parseColor("#444444"))
-                      setTextColor(Color.WHITE)
-                      setPadding(0, 40, 0, 40)
-                  }
-
-                  startStopBtn.setOnClickListener { toggleMetronome() }
-
-                  layout.addView(titleText)
-                  layout.addView(bpmText)
-                  layout.addView(bpmSlider)
-                  layout.addView(vibStrongCb)
-                  layout.addView(vibWeakCb)
-                  layout.addView(startStopBtn)
-
+                  layout.addView(statusText)
+                  layout.addView(startBtn)
                   setContentView(layout)
-              }
-
-              private fun toggleMetronome() {
-                  if (isRunning) {
-                      isRunning = false
-                      startStopBtn.text = "START"
-                      startStopBtn.setBackgroundColor(Color.parseColor("#444444"))
-                  } else {
-                      isRunning = true
-                      startStopBtn.text = "STOP"
-                      startStopBtn.setBackgroundColor(Color.parseColor("#882222"))
-                      beat = 0
-                      
-                      thread {
-                          var nextTime = System.currentTimeMillis()
-                          while (isRunning) {
-                              val intervalMs = 60000 / bpm
-                              beat++
-                              val isStrong = beat % 2 == 1
-                              
-                              toneGen.startTone(if (isStrong) ToneGenerator.TONE_CDMA_ABBR_ALERT else ToneGenerator.TONE_CDMA_SOFT_ERROR_LITE, 40)
-
-                              val shouldVibrate = (isStrong && vibStrongCb.isChecked) || (!isStrong && vibWeakCb.isChecked)
-                              if (shouldVibrate) {
-                                  val duration = if (isStrong) 60L else 40L
-                                  val effect = VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE)
-                                  val attr = AudioAttributes.Builder()
-                                      .setUsage(AudioAttributes.USAGE_ALARM)
-                                      .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                                      .build()
-                                  vibrator.vibrate(effect, attr)
-                              }
-
-                              nextTime += intervalMs
-                              val sleepTime = nextTime - System.currentTimeMillis()
-                              if (sleepTime > 0) {
-                                  Thread.sleep(sleepTime)
-                              } else {
-                                  nextTime = System.currentTimeMillis()
-                              }
-                          }
-                      }
-                  }
-              }
-
-              override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-                  if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-                      if (event?.repeatCount == 0) {
-                          val currentTime = System.currentTimeMillis()
-                          if (currentTime - lastVolumeClickTime < 500) {
-                              runOnUiThread { toggleMetronome() }
-                              lastVolumeClickTime = 0
-                          } else {
-                              lastVolumeClickTime = currentTime
-                          }
-                      }
-                      return false
-                  }
-                  return super.onKeyDown(keyCode, event)
-              }
-              
-              override fun onDestroy() {
-                  super.onDestroy()
-                  isRunning = false
-                  toneGen.release()
               }
           }
           EOF
-          
-          # 6. Скачиваем SVG во временную папку, а в ресурсы кладем только PNG!
-          curl -sL -o /tmp/ic_launcher.svg https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f6b2.svg
+
+          # 5. MetronomeService.kt (ВСЯ ЛОГИКА ТУТ)
+          cat << 'EOF' > app/src/main/java/com/example/metronome/MetronomeService.kt
+          package com.example.metronome
+
+          import android.app.*
+          import android.content.Intent
+          import android.media.*
+          import android.os.*
+          import android.support.v4.media.session.MediaSessionCompat
+          import android.support.v4.media.session.PlaybackStateCompat
+          import kotlin.concurrent.thread
+          import kotlin.math.random
+
+          class MetronomeService : Service() {
+              private var isRunning = false
+              private var bpm = 90
+              private lateinit var audioTrack: AudioTrack
+              private lateinit var wakeLock: PowerManager.WakeLock
+              private lateinit var mediaSession: MediaSessionCompat
+              
+              override fun onCreate() {
+                  super.onCreate()
+                  val nm = getSystemService(NotificationManager::class.java)
+                  nm.createNotificationChannel(NotificationChannel("m", "Metronome", NotificationManager.IMPORTANCE_LOW))
+                  
+                  val notification = Notification.Builder(this, "m")
+                      .setContentTitle("Metronome Active")
+                      .setContentText("Use Volume Up to toggle")
+                      .setSmallIcon(android.R.drawable.ic_media_play)
+                      .build()
+                  
+                  startForeground(1, notification)
+
+                  val pm = getSystemService(POWER_SERVICE) as PowerManager
+                  wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Velo::Lock")
+
+                  setupAudio()
+                  setupMediaSession()
+              }
+
+              private fun setupAudio() {
+                  val sampleRate = 44100
+                  val duration = 0.25 // 250ms для шуршания
+                  val numSamples = (duration * sampleRate).toInt()
+                  val buffer = FloatArray(numSamples)
+                  
+                  // Генерируем "Маракас" (белый шум с мягкой атакой)
+                  for (i in 0 until numSamples) {
+                      val noise = (Math.random() * 2 - 1).toFloat()
+                      val attackLimit = numSamples * 0.5 // 50% времени на нарастание (МЯГКАЯ атака)
+                      val envelope = if (i < attackLimit) (i / attackLimit).toFloat() 
+                                     else (1.0 - (i - attackLimit) / (numSamples - attackLimit)).toFloat()
+                      buffer[i] = noise * envelope
+                  }
+
+                  audioTrack = AudioTrack.Builder()
+                      .setAudioAttributes(AudioAttributes.Builder()
+                          .setUsage(AudioAttributes.USAGE_ALARM)
+                          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                          .build())
+                      .setAudioFormat(AudioFormat.Builder()
+                          .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                          .setSampleRate(sampleRate)
+                          .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                          .build())
+                      .setBufferSizeInBytes(buffer.size * 4)
+                      .setTransferMode(AudioTrack.MODE_STATIC)
+                      .build()
+                  
+                  audioTrack.write(buffer, 0, buffer.size, AudioTrack.WRITE_BLOCKING)
+                  audioTrack.setLoopPoints(0, 0, 0) // Без зацикливания
+              }
+
+              private fun setupMediaSession() {
+                  mediaSession = MediaSessionCompat(this, "VeloMetronome")
+                  mediaSession.setCallback(object : MediaSessionCompat.Callback() {
+                      // Ловим нажатия Volume через медиа-кнопки
+                      override fun onMediaButtonEvent(mediaButtonEvent: Intent): Boolean {
+                          toggle()
+                          return true
+                      }
+                  })
+                  
+                  val state = PlaybackStateCompat.Builder()
+                      .setActions(PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_STOP)
+                      .setState(PlaybackStateCompat.STATE_PLAYING, 0, 1.0f)
+                      .build()
+                  
+                  mediaSession.setPlaybackState(state)
+                  mediaSession.isActive = true
+              }
+
+              private fun toggle() {
+                  if (isRunning) {
+                      isRunning = false
+                      if (wakeLock.isHeld) wakeLock.release()
+                  } else {
+                      isRunning = true
+                      wakeLock.acquire(2*60*60*1000L)
+                      startLoop()
+                  }
+              }
+
+              private fun startLoop() {
+                  thread {
+                      var nextTime = System.currentTimeMillis()
+                      while (isRunning) {
+                          audioTrack.stop()
+                          audioTrack.reloadStaticData()
+                          audioTrack.play() // Наш шуршащий маракас
+
+                          val interval = 60000L / bpm
+                          nextTime += interval
+                          val sleep = nextTime - System.currentTimeMillis()
+                          if (sleep > 0) Thread.sleep(sleep) else nextTime = System.currentTimeMillis()
+                      }
+                  }
+              }
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  toggle() // Запуск/стоп при нажатии кнопки в приложении
+                  return START_STICKY
+              }
+
+              override fun onBind(intent: Intent?) = null
+              
+              override fun onDestroy() {
+                  isRunning = false
+                  if (wakeLock.isHeld) wakeLock.release()
+                  mediaSession.release()
+                  audioTrack.release()
+                  super.onDestroy()
+              }
+          }
+          EOF
+
+          # 6. Иконка
+          curl -sL -o /tmp/ic.svg https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f6b2.svg
           sudo apt-get update && sudo apt-get install -y librsvg2-bin
-          rsvg-convert -w 192 -h 192 /tmp/ic_launcher.svg -o app/src/main/res/mipmap/ic_launcher.png
-          
-      - name: Build Native APK
+          rsvg-convert -w 192 -h 192 /tmp/ic.svg -o app/src/main/res/mipmap/ic_launcher.png
+
+      - name: Build APK
         run: gradle assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Native-Metronome-APK
+          name: Velo-Maracas-Native
           path: app/build/outputs/apk/debug/app-debug.apk
