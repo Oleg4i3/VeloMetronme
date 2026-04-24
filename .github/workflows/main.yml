@@ -1,37 +1,4 @@
-name: Build Metronome APK
-
-on:
-  push:
-    branches: [ "main" ]
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Install Cordova
-        run: npm install -g cordova
-
-      - name: Create Cordova Project
-        run: |
-          cordova create metronome com.example.metronome Metronome
-          cd metronome
-          cordova platform add android
-          cordova plugin add cordova-plugin-vibration
-
-      - name: Write Application Source
+- name: Write Application Source
         run: |
           cat << 'EOF' > metronome/www/index.html
           <!doctype html>
@@ -47,6 +14,8 @@ jobs:
           body { font-family: sans-serif; padding: 20px; background:#111; color:#eee; }
           button, input { font-size: 18px; margin: 12px 0; }
           input[type=range]{ width: 100%; }
+          .checkbox-group { margin: 15px 0; font-size: 16px; }
+          .checkbox-group label { display: block; margin-bottom: 10px; cursor: pointer; }
           </style>
           </head>
           <body>
@@ -54,6 +23,12 @@ jobs:
           <label>BPM: <span id="bpmVal">90</span></label><br>
           <input id="bpm" type="range" min="40" max="180" value="90">
           <br>
+          
+          <div class="checkbox-group">
+            <label><input type="checkbox" id="vibStrong"> Вибро на сильную долю</label>
+            <label><input type="checkbox" id="vibWeak" checked> Вибро на слабую долю</label>
+          </div>
+
           <button id="start">Start</button>
           <button id="stop">Stop</button>
 
@@ -85,6 +60,8 @@ jobs:
               const bpmSlider = document.getElementById("bpm");
               const bpmVal = document.getElementById("bpmVal");
               const silentAudio = document.getElementById("silentAudio");
+              const vibStrongCheckbox = document.getElementById("vibStrong");
+              const vibWeakCheckbox = document.getElementById("vibWeak");
 
               bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
 
@@ -148,10 +125,17 @@ jobs:
                       const strong = (beat % 2 === 1);
                       playBeat(nextTime, strong);
 
-                      if (!strong) {
+                      // Проверяем состояние чекбоксов
+                      const doVibStrong = strong && vibStrongCheckbox.checked;
+                      const doVibWeak = !strong && vibWeakCheckbox.checked;
+
+                      if (doVibStrong || doVibWeak) {
                           const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
+                          // Сильная доля вибрирует чуть дольше для тактильного отличия
+                          const vibDuration = strong ? 60 : 40; 
+                          
                           setTimeout(() => {
-                              if (navigator.vibrate) navigator.vibrate(40);
+                              if (navigator.vibrate) navigator.vibrate(vibDuration);
                           }, delay);
                       }
                       nextTime += interval;
@@ -215,14 +199,3 @@ jobs:
           </body>
           </html>
           EOF
-
-      - name: Build Android APK
-        run: |
-          cd metronome
-          cordova build android
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Metronome-APK
-          path: metronome/platforms/android/app/build/outputs/apk/debug/app-debug.apk
