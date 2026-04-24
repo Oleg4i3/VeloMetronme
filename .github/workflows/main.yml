@@ -96,14 +96,17 @@ jobs:
           import android.widget.*
           import android.graphics.Color
           import android.view.Gravity
+          import android.view.View
 
           object MetronomeState {
               var bpm = 90
-              var soundEnabled = true
+              var soundStrong = true
+              var soundWeak = true
+              var soundType = 0 // 0: Маракасы, 1: Щелчок, 2: Beep
               var vibStrong = false
               var vibWeak = true
               var isPlaying = false
-              var lastToggleTime = 0L // Таймер для защиты от двойного срабатывания кнопок
+              var lastToggleTime = 0L
               var uiCallback: (() -> Unit)? = null
           }
 
@@ -129,7 +132,7 @@ jobs:
                   val bpmSlider = SeekBar(this).apply {
                       max = 140 
                       progress = MetronomeState.bpm - 40
-                      setPadding(0, 0, 0, 80)
+                      setPadding(0, 0, 0, 60)
                       setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                           override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                               MetronomeState.bpm = progress + 40
@@ -140,13 +143,36 @@ jobs:
                       })
                   }
 
-                  val soundCb = CheckBox(this).apply {
-                      text = "Звук (маракасы)"
+                  val soundTypes = arrayOf("Маракасы", "Щелчок", "Beep")
+                  val soundSpinner = Spinner(this).apply {
+                      adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, soundTypes)
+                      setSelection(MetronomeState.soundType)
+                      setPadding(0, 0, 0, 30)
+                      onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                          override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                              (view as? TextView)?.setTextColor(Color.WHITE)
+                              MetronomeState.soundType = position
+                          }
+                          override fun onNothingSelected(parent: AdapterView<*>?) {}
+                      }
+                  }
+
+                  val soundStrongCb = CheckBox(this).apply {
+                      text = "Звук на сильную долю"
                       setTextColor(Color.WHITE)
                       textSize = 18f
-                      isChecked = MetronomeState.soundEnabled
+                      isChecked = MetronomeState.soundStrong
                       setPadding(0, 0, 0, 30)
-                      setOnCheckedChangeListener { _, isChecked -> MetronomeState.soundEnabled = isChecked }
+                      setOnCheckedChangeListener { _, isChecked -> MetronomeState.soundStrong = isChecked }
+                  }
+
+                  val soundWeakCb = CheckBox(this).apply {
+                      text = "Звук на слабую долю"
+                      setTextColor(Color.WHITE)
+                      textSize = 18f
+                      isChecked = MetronomeState.soundWeak
+                      setPadding(0, 0, 0, 50)
+                      setOnCheckedChangeListener { _, isChecked -> MetronomeState.soundWeak = isChecked }
                   }
 
                   val vibStrongCb = CheckBox(this).apply {
@@ -181,7 +207,9 @@ jobs:
 
                   layout.addView(bpmText)
                   layout.addView(bpmSlider)
-                  layout.addView(soundCb)
+                  layout.addView(soundSpinner)
+                  layout.addView(soundStrongCb)
+                  layout.addView(soundWeakCb)
                   layout.addView(vibStrongCb)
                   layout.addView(vibWeakCb)
                   layout.addView(startBtn)
@@ -217,8 +245,9 @@ jobs:
           import kotlin.concurrent.thread
 
           class MetronomeService : Service() {
-              private lateinit var audioStrong: AudioTrack
-              private lateinit var audioWeak: AudioTrack
+              private lateinit var tracksMaracas: Array<AudioTrack>
+              private lateinit var tracksClick: Array<AudioTrack>
+              private lateinit var tracksBeep: Array<AudioTrack>
               private lateinit var silentTrack: AudioTrack // Хак для выключенного экрана
               private lateinit var wakeLock: PowerManager.WakeLock
               private lateinit var mediaSession: MediaSessionCompat
@@ -248,39 +277,61 @@ jobs:
                   setupMediaSession()
               }
 
-              private fun createTrack(isStrong: Boolean): AudioTrack {
+              private fun createTrack(type: Int, isStrong: Boolean): AudioTrack {
                   val sampleRate = 44100
                   val duration = 0.2
                   val numSamples = (duration * sampleRate).toInt()
                   val buffer = FloatArray(numSamples)
                   
-                  val hist = FloatArray(15) // Буфер для усреднения (среза высоких частот)
-                  var histIdx = 0
-                  var sum = 0f
-                  
-                  for (i in 0 until numSamples) {
-                      val noise = (Math.random() * 2 - 1).toFloat()
-                      val attackLimit = numSamples * 0.4 
-                      val envelope = if (i < attackLimit) (i / attackLimit).toFloat() 
-                                     else (1.0 - (i - attackLimit) / (numSamples - attackLimit)).toFloat()
+                  if (type == 0) { // Маракасы
+                      val hist = FloatArray(15) 
+                      var histIdx = 0
+                      var sum = 0f
                       
-                      if (isStrong) {
-                          // Сильная доля: резкий широкий шум
-                          buffer[i] = noise * envelope * 1.0f
-                      } else {
-                          // Слабая доля: сильный Low-pass фильтр
-                          sum -= hist[histIdx]
-                          hist[histIdx] = noise
-                          sum += noise
-                          histIdx = (histIdx + 1) % 15
+                      for (i in 0 until numSamples) {
+                          val noise = (Math.random() * 2 - 1).toFloat()
+                          val attackLimit = numSamples * 0.4 
+                          val envelope = if (i < attackLimit) (i / attackLimit).toFloat() 
+                                         else (1.0 - (i - attackLimit) / (numSamples - attackLimit)).toFloat()
                           
-                          // Компенсируем падение громкости из-за фильтра (*3.0f) и обрезаем перегруз
-                          var smoothed = (sum / 15f) * 3.0f
-                          if (smoothed > 1f) smoothed = 1f
-                          if (smoothed < -1f) smoothed = -1f
+                          if (isStrong) {
+                              buffer[i] = noise * envelope * 1.0f
+                          } else {
+                              sum -= hist[histIdx]
+                              hist[histIdx] = noise
+                              sum += noise
+                              histIdx = (histIdx + 1) % 15
+                              var smoothed = (sum / 15f) * 3.0f
+                              if (smoothed > 1f) smoothed = 1f
+                              if (smoothed < -1f) smoothed = -1f
+                              buffer[i] = smoothed * envelope * 0.4f
+                          }
+                      }
+                  } else if (type == 1) { // Щелчок
+                      // Разный спектр: сильная доля - выше, слабая - ниже
+                      val centerFreq = if (isStrong) 3000.0 else 1200.0
+                      for (i in 0 until numSamples) {
+                          val t = i.toDouble() / sampleRate
+                          val envelope = Math.exp(-t * 150.0).toFloat() // Очень быстрое затухание
+                          if (envelope < 0.001f) continue
                           
-                          // Делаем тише сильной доли
-                          buffer[i] = smoothed * envelope * 0.4f
+                          val dampedSine = Math.sin(2.0 * Math.PI * centerFreq * t).toFloat()
+                          val noise = (Math.random() * 2 - 1).toFloat()
+                          val vol = if (isStrong) 1.0f else 0.6f
+                          
+                          buffer[i] = (dampedSine * 0.7f + noise * 0.3f) * envelope * vol
+                      }
+                  } else if (type == 2) { // Beep
+                      // Большая терция: 1000 Гц и 800 Гц
+                      val freq = if (isStrong) 1000.0 else 800.0
+                      for (i in 0 until numSamples) {
+                          val t = i.toDouble() / sampleRate
+                          val envelope = Math.exp(-t * 40.0).toFloat() // Мягкий короткий сигнал
+                          if (envelope < 0.001f) continue
+                          
+                          val wave = Math.sin(2.0 * Math.PI * freq * t).toFloat()
+                          val vol = if (isStrong) 0.8f else 0.5f
+                          buffer[i] = wave * envelope * vol
                       }
                   }
 
@@ -303,10 +354,10 @@ jobs:
               }
 
               private fun setupAudio() {
-                  audioStrong = createTrack(true)
-                  audioWeak = createTrack(false)
+                  tracksMaracas = arrayOf(createTrack(0, true), createTrack(0, false))
+                  tracksClick = arrayOf(createTrack(1, true), createTrack(1, false))
+                  tracksBeep = arrayOf(createTrack(2, true), createTrack(2, false))
                   
-                  // Создаем трек тишины (1 секунда нулей)
                   val silentBuffer = FloatArray(44100)
                   silentTrack = AudioTrack.Builder()
                       .setAudioAttributes(AudioAttributes.Builder()
@@ -322,7 +373,7 @@ jobs:
                       .build()
                       
                   silentTrack.write(silentBuffer, 0, silentBuffer.size, AudioTrack.WRITE_BLOCKING)
-                  silentTrack.setLoopPoints(0, silentBuffer.size, -1) // Зациклить навечно
+                  silentTrack.setLoopPoints(0, silentBuffer.size, -1) 
               }
 
               private fun setupMediaSession() {
@@ -331,7 +382,6 @@ jobs:
                   val volumeProvider = object : VolumeProviderCompat(VolumeProviderCompat.VOLUME_CONTROL_RELATIVE, 100, 50) {
                       override fun onAdjustVolume(direction: Int) {
                           val now = System.currentTimeMillis()
-                          // Debounce: игнорируем сигналы, пришедшие быстрее чем за 500мс
                           if (now - MetronomeState.lastToggleTime > 500) {
                               MetronomeState.lastToggleTime = now
                               startService(Intent(this@MetronomeService, MetronomeService::class.java).setAction("TOGGLE"))
@@ -391,8 +441,13 @@ jobs:
                           beat++
                           val isStrong = beat % 2 == 1
                           
-                          if (MetronomeState.soundEnabled) {
-                              val trackToPlay = if (isStrong) audioStrong else audioWeak
+                          val shouldPlaySound = (isStrong && MetronomeState.soundStrong) || (!isStrong && MetronomeState.soundWeak)
+                          if (shouldPlaySound) {
+                              val trackToPlay = when (MetronomeState.soundType) {
+                                  1 -> if (isStrong) tracksClick[0] else tracksClick[1]
+                                  2 -> if (isStrong) tracksBeep[0] else tracksBeep[1]
+                                  else -> if (isStrong) tracksMaracas[0] else tracksMaracas[1]
+                              }
                               trackToPlay.stop()
                               trackToPlay.reloadStaticData()
                               trackToPlay.play()
@@ -400,7 +455,6 @@ jobs:
 
                           val shouldVibrate = (isStrong && MetronomeState.vibStrong) || (!isStrong && MetronomeState.vibWeak)
                           if (shouldVibrate) {
-                              // Сильная доля теперь 150мс!
                               val duration = if (isStrong) 150L else 40L
                               val effect = VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE)
                               val attr = AudioAttributes.Builder()
@@ -424,8 +478,9 @@ jobs:
                   mediaSession.release()
                   silentTrack.stop()
                   silentTrack.release()
-                  audioStrong.release()
-                  audioWeak.release()
+                  tracksMaracas.forEach { it.release() }
+                  tracksClick.forEach { it.release() }
+                  tracksBeep.forEach { it.release() }
                   super.onDestroy()
               }
               
