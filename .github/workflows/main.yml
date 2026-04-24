@@ -31,6 +31,19 @@ jobs:
           cordova platform add android
           cordova plugin add cordova-plugin-vibration
 
+      - name: Setup App Icon
+        run: |
+          cd metronome
+          mkdir -p res
+          # Скачиваем векторную иконку велосипеда
+          curl -L -o res/icon.svg https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f6b2.svg
+          # Устанавливаем rsvg-convert для качественной растеризации SVG
+          sudo apt-get update && sudo apt-get install -y librsvg2-bin
+          # Конвертируем в PNG нужного размера
+          rsvg-convert -w 512 -h 512 res/icon.svg -o res/icon.png
+          # Внедряем иконку в config.xml
+          sed -i 's|</widget>|    <icon src="res/icon.png" />\n</widget>|' config.xml
+
       - name: Write Application Source
         run: |
           cat << 'EOF' > metronome/www/index.html
@@ -42,7 +55,7 @@ jobs:
           <meta name="format-detection" content="telephone=no">
           <meta name="msapplication-tap-highlight" content="no">
           <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
-          <title>Bike Cadence Metronome</title>
+          <title>Bike Cadence</title>
           <style>
           body { font-family: sans-serif; padding: 20px; background:#111; color:#eee; }
           button, input { font-size: 18px; margin: 12px 0; }
@@ -93,7 +106,6 @@ jobs:
               const bpmVal = document.getElementById("bpmVal");
               const silentAudio = document.getElementById("silentAudio");
               
-              // Получаем ссылки на чекбоксы
               const vibStrongCb = document.getElementById("vibStrong");
               const vibWeakCb = document.getElementById("vibWeak");
 
@@ -157,12 +169,10 @@ jobs:
                       const strong = (beat % 2 === 1);
                       playBeat(nextTime, strong);
 
-                      // Проверяем, стоит ли галочка для текущей доли
                       const shouldVibrate = (strong && vibStrongCb.checked) || (!strong && vibWeakCb.checked);
 
                       if (shouldVibrate) {
                           const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
-                          // Делаем сильную долю чуть длиннее (60мс) для тактильного отличия от слабой (40мс)
                           const vibDuration = strong ? 60 : 40;
                           
                           setTimeout(() => {
