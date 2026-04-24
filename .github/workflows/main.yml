@@ -1,4 +1,37 @@
-- name: Write Application Source
+name: Build Metronome APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Cordova
+        run: npm install -g cordova
+
+      - name: Create Cordova Project
+        run: |
+          cordova create metronome com.example.metronome Metronome
+          cd metronome
+          cordova platform add android
+          cordova plugin add cordova-plugin-vibration
+
+      - name: Write Application Source
         run: |
           cat << 'EOF' > metronome/www/index.html
           <!doctype html>
@@ -36,7 +69,6 @@
 
           <script src="cordova.js"></script>
           <script>
-          // 2. Web Worker: независимый от UI поток для точного таймера в фоне
           const workerCode = `
               let timer = null;
               self.onmessage = function(e) {
@@ -65,14 +97,12 @@
 
               bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
 
-              // Защита от краша: принудительно восстанавливаем AudioContext при разблокировке экрана
               document.addEventListener('resume', () => {
                   if (ctx && ctx.state === 'suspended') {
                       ctx.resume();
                   }
               }, false);
 
-              // --- Звуковой синтезатор ---
               function noiseBuffer(ctx, duration=0.06) {
                   const rate = ctx.sampleRate;
                   const buffer = ctx.createBuffer(1, rate * duration, rate);
@@ -125,13 +155,11 @@
                       const strong = (beat % 2 === 1);
                       playBeat(nextTime, strong);
 
-                      // Проверяем состояние чекбоксов
                       const doVibStrong = strong && vibStrongCheckbox.checked;
                       const doVibWeak = !strong && vibWeakCheckbox.checked;
 
                       if (doVibStrong || doVibWeak) {
                           const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
-                          // Сильная доля вибрирует чуть дольше для тактильного отличия
                           const vibDuration = strong ? 60 : 40; 
                           
                           setTimeout(() => {
@@ -142,7 +170,6 @@
                   }
               }
 
-              // Web Worker вызывает эту функцию каждые 25мс независимо от того, спит ли основной UI
               timerWorker.onmessage = function(e) {
                   if (e.data === 'tick' && isRunning) {
                       scheduler();
@@ -154,7 +181,6 @@
                   else start();
               }
 
-              // --- Двойное нажатие громкости (<500 мс) ---
               function handleVolumeButton() {
                   const currentTime = new Date().getTime();
                   if (currentTime - lastVolumeClickTime < 500) {
@@ -165,7 +191,6 @@
                   }
               }
 
-              // Обработчики кнопок громкости
               document.addEventListener("volumeupbutton", handleVolumeButton, false);
               document.addEventListener("volumedownbutton", handleVolumeButton, false);
 
@@ -175,14 +200,12 @@
                   if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
                   if (ctx.state === 'suspended') ctx.resume();
 
-                  // Запускаем тихий трек для блокировки "сна" устройства
                   silentAudio.play().catch(e => console.log("Audio lock failed:", e));
 
                   isRunning = true;
                   beat = 0;
                   nextTime = ctx.currentTime + 0.05;
                   
-                  // Запускаем планировщик в Worker
                   timerWorker.postMessage('start');
               }
 
@@ -199,3 +222,14 @@
           </body>
           </html>
           EOF
+
+      - name: Build Android APK
+        run: |
+          cd metronome
+          cordova build android
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Metronome-APK
+          path: metronome/platforms/android/app/build/outputs/apk/debug/app-debug.apk
