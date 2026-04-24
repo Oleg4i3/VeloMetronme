@@ -26,14 +26,12 @@ jobs:
           mkdir -p app/src/main/java/com/example/metronome
           mkdir -p app/src/main/res/mipmap
           
-          # 0. Настройки Gradle (AndroidX и подавление предупреждений SDK 34)
           cat << 'EOF' > gradle.properties
           android.useAndroidX=true
           android.enableJetifier=true
           android.suppressUnsupportedCompileSdk=34
           EOF
           
-          # 1. Настройки проекта
           cat << 'EOF' > settings.gradle.kts
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
           dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
@@ -48,7 +46,6 @@ jobs:
           }
           EOF
 
-          # 2. Модуль (compileSdk 34)
           cat << 'EOF' > app/build.gradle.kts
           plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
           android {
@@ -58,8 +55,8 @@ jobs:
                   applicationId = "com.example.metronome"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 3
-                  versionName = "1.2"
+                  versionCode = 4
+                  versionName = "1.3"
               }
               compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
               kotlinOptions { jvmTarget = "17" }
@@ -70,7 +67,6 @@ jobs:
           }
           EOF
 
-          # 3. Манифест
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -91,7 +87,6 @@ jobs:
           </manifest>
           EOF
 
-          # 4. MainActivity.kt (ВЕРНУЛ ПОЛЗУНКИ И ЧЕКБОКСЫ!)
           cat << 'EOF' > app/src/main/java/com/example/metronome/MainActivity.kt
           package com.example.metronome
 
@@ -102,7 +97,6 @@ jobs:
           import android.graphics.Color
           import android.view.Gravity
 
-          // Общее состояние для UI и Сервиса
           object MetronomeState {
               var bpm = 90
               var vibStrong = false
@@ -198,7 +192,6 @@ jobs:
           }
           EOF
 
-          # 5. MetronomeService.kt (ВЕРНУЛ ВИБРАЦИЮ!)
           cat << 'EOF' > app/src/main/java/com/example/metronome/MetronomeService.kt
           package com.example.metronome
 
@@ -211,7 +204,8 @@ jobs:
           import kotlin.concurrent.thread
 
           class MetronomeService : Service() {
-              private lateinit var audioTrack: AudioTrack
+              private lateinit var audioStrong: AudioTrack
+              private lateinit var audioWeak: AudioTrack
               private lateinit var wakeLock: PowerManager.WakeLock
               private lateinit var mediaSession: MediaSessionCompat
               private lateinit var vibrator: Vibrator
@@ -226,7 +220,7 @@ jobs:
                   
                   val notification = Notification.Builder(this, "m")
                       .setContentTitle("Velo Maracas")
-                      .setContentText("Use Media/Volume keys to toggle")
+                      .setContentText("Use Media keys to toggle")
                       .setSmallIcon(android.R.drawable.ic_media_play)
                       .build()
                   
@@ -239,23 +233,33 @@ jobs:
                   setupMediaSession()
               }
 
-              private fun setupAudio() {
+              private fun createTrack(isStrong: Boolean): AudioTrack {
                   val sampleRate = 44100
-                  val duration = 0.25 // Мягкий шуршащий звук
+                  val duration = 0.2
                   val numSamples = (duration * sampleRate).toInt()
                   val buffer = FloatArray(numSamples)
                   
+                  var lastNoise = 0f
                   for (i in 0 until numSamples) {
                       val noise = (Math.random() * 2 - 1).toFloat()
-                      val attackLimit = numSamples * 0.5 
+                      val attackLimit = numSamples * 0.4 
                       val envelope = if (i < attackLimit) (i / attackLimit).toFloat() 
                                      else (1.0 - (i - attackLimit) / (numSamples - attackLimit)).toFloat()
-                      buffer[i] = noise * envelope
+                      
+                      if (isStrong) {
+                          // Яркий шум на 100% громкости
+                          buffer[i] = noise * envelope * 1.0f
+                      } else {
+                          // Глухой шум (срезаем высокие частоты усреднением) на 50% громкости
+                          val smoothed = (noise + lastNoise) / 2f
+                          lastNoise = noise
+                          buffer[i] = smoothed * envelope * 0.5f
+                      }
                   }
 
-                  audioTrack = AudioTrack.Builder()
+                  val track = AudioTrack.Builder()
                       .setAudioAttributes(AudioAttributes.Builder()
-                          .setUsage(AudioAttributes.USAGE_ALARM)
+                          .setUsage(AudioAttributes.USAGE_MEDIA) // ИСПОЛЬЗУЕМ КАНАЛ МЕДИА (НЕТ ВСПЫШКЕ!)
                           .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                           .build())
                       .setAudioFormat(AudioFormat.Builder()
@@ -267,8 +271,13 @@ jobs:
                       .setTransferMode(AudioTrack.MODE_STATIC)
                       .build()
                   
-                  audioTrack.write(buffer, 0, buffer.size, AudioTrack.WRITE_BLOCKING)
-                  audioTrack.setLoopPoints(0, 0, 0)
+                  track.write(buffer, 0, buffer.size, AudioTrack.WRITE_BLOCKING)
+                  return track
+              }
+
+              private fun setupAudio() {
+                  audioStrong = createTrack(true)
+                  audioWeak = createTrack(false)
               }
 
               private fun setupMediaSession() {
@@ -312,19 +321,19 @@ jobs:
                           beat++
                           val isStrong = beat % 2 == 1
                           
-                          // Звук маракаса
-                          audioTrack.stop()
-                          audioTrack.reloadStaticData()
-                          audioTrack.play()
+                          // Выбираем нужный трек в зависимости от доли
+                          val trackToPlay = if (isStrong) audioStrong else audioWeak
+                          trackToPlay.stop()
+                          trackToPlay.reloadStaticData()
+                          trackToPlay.play()
 
-                          // Проверка чекбоксов и вызов вибрации (как ты и просил!)
                           val shouldVibrate = (isStrong && MetronomeState.vibStrong) || (!isStrong && MetronomeState.vibWeak)
                           if (shouldVibrate) {
                               val duration = if (isStrong) 60L else 40L
                               val effect = VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE)
+                              // Вибрация тоже через канал MEDIA
                               val attr = AudioAttributes.Builder()
-                                  .setUsage(AudioAttributes.USAGE_ALARM)
-                                  .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                  .setUsage(AudioAttributes.USAGE_MEDIA) 
                                   .build()
                               try { vibrator.vibrate(effect, attr) } catch (e: Exception) {}
                           }
@@ -342,7 +351,8 @@ jobs:
                   MetronomeState.uiCallback?.invoke()
                   if (wakeLock.isHeld) wakeLock.release()
                   mediaSession.release()
-                  audioTrack.release()
+                  audioStrong.release()
+                  audioWeak.release()
                   super.onDestroy()
               }
               
@@ -350,7 +360,6 @@ jobs:
           }
           EOF
 
-          # 6. Иконка
           curl -sL -o /tmp/ic.svg https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f6b2.svg
           sudo apt-get update && sudo apt-get install -y librsvg2-bin
           rsvg-convert -w 192 -h 192 /tmp/ic.svg -o app/src/main/res/mipmap/ic_launcher.png
