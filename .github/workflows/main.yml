@@ -1,4 +1,4 @@
-name: Build Metronome APK
+name: Build Native Metronome APK
 
 on:
   push:
@@ -10,240 +10,265 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Cordova
-        run: npm install -g cordova
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.4'
 
-      - name: Create Cordova Project
+      - name: Create Native Android Project
         run: |
-          cordova create metronome com.example.metronome Metronome
-          cd metronome
-          cordova platform add android
-          cordova plugin add cordova-plugin-vibration
-
-      - name: Setup App Icon
-        run: |
-          cd metronome
-          mkdir -p res
-          # Скачиваем векторную иконку велосипеда
-          curl -L -o res/icon.svg https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f6b2.svg
-          # Устанавливаем rsvg-convert для качественной растеризации SVG
-          sudo apt-get update && sudo apt-get install -y librsvg2-bin
-          # Конвертируем в PNG нужного размера
-          rsvg-convert -w 512 -h 512 res/icon.svg -o res/icon.png
-          # Внедряем иконку в config.xml
-          sed -i 's|</widget>|    <icon src="res/icon.png" />\n</widget>|' config.xml
-
-      - name: Write Application Source
-        run: |
-          cat << 'EOF' > metronome/www/index.html
-          <!doctype html>
-          <html>
-          <head>
-          <meta charset="utf-8">
-          <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: gap: https://ssl.gstatic.com 'unsafe-eval' 'unsafe-inline' blob:; media-src * data:; img-src 'self' data: content:;">
-          <meta name="format-detection" content="telephone=no">
-          <meta name="msapplication-tap-highlight" content="no">
-          <meta name="viewport" content="initial-scale=1, width=device-width, viewport-fit=cover">
-          <title>Bike Cadence</title>
-          <style>
-          body { font-family: sans-serif; padding: 20px; background:#111; color:#eee; }
-          button, input { font-size: 18px; margin: 12px 0; }
-          input[type=range]{ width: 100%; }
-          .checkbox-group { margin: 15px 0; font-size: 16px; }
-          .checkbox-group label { display: block; margin-bottom: 10px; cursor: pointer; }
-          </style>
-          </head>
-          <body>
-          <h2>Cadence metronome</h2>
-          <label>BPM: <span id="bpmVal">90</span></label><br>
-          <input id="bpm" type="range" min="40" max="180" value="90">
-          <br>
+          mkdir -p app/src/main/java/com/example/metronome
+          mkdir -p app/src/main/res/mipmap
           
-          <div class="checkbox-group">
-            <label><input type="checkbox" id="vibStrong"> Вибро на сильную долю</label>
-            <label><input type="checkbox" id="vibWeak" checked> Вибро на слабую долю</label>
-          </div>
-
-          <button id="start">Start</button>
-          <button id="stop">Stop</button>
-
-          <audio id="silentAudio" loop src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA" style="display:none;"></audio>
-
-          <script src="cordova.js"></script>
-          <script>
-          const workerCode = `
-              let timer = null;
-              self.onmessage = function(e) {
-                  if (e.data === 'start') {
-                      timer = setInterval(() => postMessage('tick'), 25);
-                  } else if (e.data === 'stop') {
-                      clearInterval(timer);
-                  }
-              };
-          `;
-          const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
-          const timerWorker = new Worker(URL.createObjectURL(workerBlob));
-
-          document.addEventListener('deviceready', function() {
-              let ctx;
-              let isRunning = false;
-              let beat = 0;
-              let nextTime = 0;
-              let lastVolumeClickTime = 0;
-
-              const bpmSlider = document.getElementById("bpm");
-              const bpmVal = document.getElementById("bpmVal");
-              const silentAudio = document.getElementById("silentAudio");
-              
-              const vibStrongCb = document.getElementById("vibStrong");
-              const vibWeakCb = document.getElementById("vibWeak");
-
-              bpmSlider.oninput = () => bpmVal.textContent = bpmSlider.value;
-
-              document.addEventListener('resume', () => {
-                  if (ctx && ctx.state === 'suspended') {
-                      ctx.resume();
-                  }
-              }, false);
-
-              function noiseBuffer(ctx, duration=0.06) {
-                  const rate = ctx.sampleRate;
-                  const buffer = ctx.createBuffer(1, rate * duration, rate);
-                  const data = buffer.getChannelData(0);
-                  for (let i = 0; i < data.length; i++) {
-                      data[i] = (Math.random()*2 - 1) * 0.8;
-                  }
-                  return buffer;
-              }
-
-              function playBeat(time, strong=false) {
-                  const source = ctx.createBufferSource();
-                  source.buffer = noiseBuffer(ctx, strong ? 0.09 : 0.06);
-
-                  const filter = ctx.createBiquadFilter();
-                  filter.type = "bandpass";
-                  filter.frequency.value = strong ? 2200 : 1400;
-                  filter.Q.value = 6;
-
-                  const highShelf = ctx.createBiquadFilter();
-                  highShelf.type = "highshelf";
-                  highShelf.frequency.value = 2000;
-                  highShelf.gain.value = strong ? 6 : 3;
-
-                  const gain = ctx.createGain();
-                  gain.gain.value = strong ? 1.6 : 0.9;
-
-                  const comp = ctx.createDynamicsCompressor();
-                  comp.threshold.value = -18;
-                  comp.knee.value = 20;
-                  comp.ratio.value = 6;
-                  comp.attack.value = 0.003;
-                  comp.release.value = 0.15;
-
-                  source.connect(filter);
-                  filter.connect(highShelf);
-                  highShelf.connect(gain);
-                  gain.connect(comp);
-                  comp.connect(ctx.destination);
-
-                  source.start(time);
-              }
-
-              function scheduler() {
-                  const bpm = parseInt(bpmSlider.value);
-                  const interval = 60 / bpm;
-
-                  while (nextTime < ctx.currentTime + 0.1) {
-                      beat++;
-                      const strong = (beat % 2 === 1);
-                      playBeat(nextTime, strong);
-
-                      const shouldVibrate = (strong && vibStrongCb.checked) || (!strong && vibWeakCb.checked);
-
-                      if (shouldVibrate) {
-                          const delay = Math.max(0, (nextTime - ctx.currentTime) * 1000);
-                          const vibDuration = strong ? 60 : 40;
-                          
-                          setTimeout(() => {
-                              if (navigator.vibrate) navigator.vibrate(vibDuration);
-                          }, delay);
-                      }
-                      
-                      nextTime += interval;
-                  }
-              }
-
-              timerWorker.onmessage = function(e) {
-                  if (e.data === 'tick' && isRunning) {
-                      scheduler();
-                  }
-              };
-
-              function toggleMetronome() {
-                  if (isRunning) stop();
-                  else start();
-              }
-
-              function handleVolumeButton() {
-                  const currentTime = new Date().getTime();
-                  if (currentTime - lastVolumeClickTime < 500) {
-                      toggleMetronome();
-                      lastVolumeClickTime = 0;
-                  } else {
-                      lastVolumeClickTime = currentTime;
-                  }
-              }
-
-              document.addEventListener("volumeupbutton", handleVolumeButton, false);
-              document.addEventListener("volumedownbutton", handleVolumeButton, false);
-
-              function start() {
-                  if (isRunning) return;
-                  
-                  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-                  if (ctx.state === 'suspended') ctx.resume();
-
-                  silentAudio.play().catch(e => console.log("Audio lock failed:", e));
-
-                  isRunning = true;
-                  beat = 0;
-                  nextTime = ctx.currentTime + 0.05;
-                  
-                  timerWorker.postMessage('start');
-              }
-
-              function stop() {
-                  isRunning = false;
-                  timerWorker.postMessage('stop');
-                  silentAudio.pause();
-              }
-
-              document.getElementById("start").onclick = start;
-              document.getElementById("stop").onclick = stop;
-          }, false);
-          </script>
-          </body>
-          </html>
+          # 1. Настройки проекта Gradle
+          cat << 'EOF' > settings.gradle.kts
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = "Metronome"
+          include(":app")
           EOF
 
-      - name: Build Android APK
-        run: |
-          cd metronome
-          cordova build android
+          # 2. Корневой build.gradle
+          cat << 'EOF' > build.gradle.kts
+          plugins {
+              id("com.android.application") version "8.1.0" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.0" apply false
+          }
+          EOF
+
+          # 3. Модульный build.gradle (без сторонних зависимостей!)
+          cat << 'EOF' > app/build.gradle.kts
+          plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
+          android {
+              namespace = "com.example.metronome"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.example.metronome"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          EOF
+
+          # 4. AndroidManifest (запрашиваем вибрацию и запрет сна)
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <application android:label="Bike Cadence" android:icon="@mipmap/ic_launcher" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          # 5. MainActivity.kt (Вся логика и UI в одном файле)
+          cat << 'EOF' > app/src/main/java/com/example/metronome/MainActivity.kt
+          package com.example.metronome
+
+          import android.app.Activity
+          import android.media.AudioAttributes
+          import android.media.AudioManager
+          import android.media.ToneGenerator
+          import android.os.Bundle
+          import android.os.VibrationEffect
+          import android.os.Vibrator
+          import android.view.KeyEvent
+          import android.view.WindowManager
+          import android.widget.*
+          import android.graphics.Color
+          import android.view.Gravity
+          import kotlin.concurrent.thread
+
+          class MainActivity : Activity() {
+              private var isRunning = false
+              private var bpm = 90
+              private var beat = 0
+              private lateinit var vibrator: Vibrator
+              private lateinit var toneGen: ToneGenerator
+              private var lastVolumeClickTime = 0L
+
+              private lateinit var startStopBtn: Button
+              private lateinit var vibStrongCb: CheckBox
+              private lateinit var vibWeakCb: CheckBox
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  // Не даем экрану погаснуть
+                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+                  vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
+                  // Аппаратный генератор звука
+                  toneGen = ToneGenerator(AudioManager.STREAM_ALARM, 100)
+
+                  // Собираем интерфейс программно
+                  val layout = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(60, 100, 60, 60)
+                      setBackgroundColor(Color.parseColor("#111111"))
+                  }
+
+                  val titleText = TextView(this).apply {
+                      text = "Cadence Metronome"
+                      textSize = 28f
+                      setTextColor(Color.WHITE)
+                      gravity = Gravity.CENTER
+                      setPadding(0, 0, 0, 80)
+                  }
+
+                  val bpmText = TextView(this).apply {
+                      text = "BPM: 90"
+                      textSize = 24f
+                      setTextColor(Color.parseColor("#EEEEEE"))
+                      setPadding(0, 0, 0, 20)
+                  }
+
+                  val bpmSlider = SeekBar(this).apply {
+                      max = 140 // Шкала 0-140 означает 40-180 BPM
+                      progress = 50
+                      setPadding(0, 0, 0, 80)
+                  }
+                  
+                  bpmSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                          bpm = progress + 40
+                          bpmText.text = "BPM: $bpm"
+                      }
+                      override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                      override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                  })
+
+                  vibStrongCb = CheckBox(this).apply {
+                      text = "Вибро на сильную долю"
+                      setTextColor(Color.WHITE)
+                      textSize = 18f
+                      setPadding(0, 0, 0, 30)
+                  }
+
+                  vibWeakCb = CheckBox(this).apply {
+                      text = "Вибро на слабую долю"
+                      setTextColor(Color.WHITE)
+                      textSize = 18f
+                      isChecked = true
+                      setPadding(0, 0, 0, 80)
+                  }
+                  
+                  startStopBtn = Button(this).apply {
+                      text = "START"
+                      textSize = 24f
+                      setBackgroundColor(Color.parseColor("#444444"))
+                      setTextColor(Color.WHITE)
+                      setPadding(0, 40, 0, 40)
+                  }
+
+                  startStopBtn.setOnClickListener { toggleMetronome() }
+
+                  layout.addView(titleText)
+                  layout.addView(bpmText)
+                  layout.addView(bpmSlider)
+                  layout.addView(vibStrongCb)
+                  layout.addView(vibWeakCb)
+                  layout.addView(startStopBtn)
+
+                  setContentView(layout)
+              }
+
+              private fun toggleMetronome() {
+                  if (isRunning) {
+                      isRunning = false
+                      startStopBtn.text = "START"
+                      startStopBtn.setBackgroundColor(Color.parseColor("#444444"))
+                  } else {
+                      isRunning = true
+                      startStopBtn.text = "STOP"
+                      startStopBtn.setBackgroundColor(Color.parseColor("#882222"))
+                      beat = 0
+                      
+                      // Независимый поток таймера
+                      thread {
+                          var nextTime = System.currentTimeMillis()
+                          while (isRunning) {
+                              val intervalMs = 60000 / bpm
+                              beat++
+                              val isStrong = beat % 2 == 1
+                              
+                              // Пук-пук (Короткий системный писк)
+                              toneGen.startTone(if (isStrong) ToneGenerator.TONE_CDMA_ABBR_ALERT else ToneGenerator.TONE_CDMA_SOFT_ERROR_LITE, 40)
+
+                              // Вибро (Маскируемся под будильник)
+                              val shouldVibrate = (isStrong && vibStrongCb.isChecked) || (!isStrong && vibWeakCb.isChecked)
+                              if (shouldVibrate) {
+                                  val duration = if (isStrong) 60L else 40L
+                                  val effect = VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE)
+                                  val attr = AudioAttributes.Builder()
+                                      .setUsage(AudioAttributes.USAGE_ALARM)
+                                      .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                      .build()
+                                  vibrator.vibrate(effect, attr)
+                              }
+
+                              nextTime += intervalMs
+                              val sleepTime = nextTime - System.currentTimeMillis()
+                              if (sleepTime > 0) {
+                                  Thread.sleep(sleepTime)
+                              } else {
+                                  nextTime = System.currentTimeMillis()
+                              }
+                          }
+                      }
+                  }
+              }
+
+              // Перехват кнопок громкости для двойного нажатия (<500мс)
+              override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+                  if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                      if (event?.repeatCount == 0) {
+                          val currentTime = System.currentTimeMillis()
+                          if (currentTime - lastVolumeClickTime < 500) {
+                              runOnUiThread { toggleMetronome() }
+                              lastVolumeClickTime = 0
+                          } else {
+                              lastVolumeClickTime = currentTime
+                          }
+                      }
+                      return false // Позволяем системе менять громкость
+                  }
+                  return super.onKeyDown(keyCode, event)
+              }
+              
+              override fun onDestroy() {
+                  super.onDestroy()
+                  isRunning = false
+                  toneGen.release()
+              }
+          }
+          EOF
+          
+          # 6. Скачиваем и генерируем иконку велосипеда
+          curl -sL -o app/src/main/res/mipmap/ic_launcher.svg https://raw.githubusercontent.com/twitter/twemoji/master/assets/svg/1f6b2.svg
+          sudo apt-get update && sudo apt-get install -y librsvg2-bin
+          rsvg-convert -w 192 -h 192 app/src/main/res/mipmap/ic_launcher.svg -o app/src/main/res/mipmap/ic_launcher.png
+          
+      - name: Build Native APK
+        run: gradle assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Metronome-APK
-          path: metronome/platforms/android/app/build/outputs/apk/debug/app-debug.apk
+          name: Native-Metronome-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
